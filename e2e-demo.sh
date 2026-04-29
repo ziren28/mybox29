@@ -67,7 +67,7 @@ EOF
 CHAT_RESP=$(curl -s -X POST "$API/chat" \
     -H "content-type: application/json" \
     -d "$(jq -n --arg c "$COOKIE" --arg env "$ENV_ID" --arg p "$PROMPT" '{
-        cookie:$c, environment_id:$env, title:"e2e-demo", thinking:false,
+        cookie:$c, environment_id:$env, title:"untitle", thinking:false,
         timeout_ms:240000, prompt:$p
     }')")
 SID=$(echo "$CHAT_RESP" | jq -r .session_id)
