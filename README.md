@@ -271,3 +271,96 @@ docker run --rm --entrypoint /usr/local/bin/environment-manager \
 
 如果输出 `whoami request returned status 403` → 网络通、二进制 OK，仅是 token scope 不足  
 如果输出 `whoami request returned status 200` → service key 合格，正常进入轮询循环
+
+## 🛰️ 运维手册（Bridge worker 模式）
+
+### 三种 token 全景
+
+| Token | 形态 | 来源 | 寿命 | 何时需要 |
+|---|---|---|---|---|
+| **OAuth Access Token** | `~108B` | claude.ai 浏览器登录 | 短期，host 自动刷新 | **仅注册/续约** |
+| **Environment Service Key** | `sk-ant-oat01-...` | `POST /v1/environments/bridge` 返回 | 长期（直到删除 environment） | **每次 worker 启动** |
+| Session Ingress Token | `660B` | claude.ai 登录态 | 短期 | 仅独立 `claude --print` 模式 |
+
+### 流程图
+
+```
+[OAuth token]  ─首次/续约─►  POST /v1/environments/bridge
+                                     │
+                                     ▼
+                     [env_id + service_key]  存到 KMS
+                                     │
+                                     ▼ KMS_KEY 单一秘密
+                          ./run-bridge.sh   →  docker run worker
+                                     │
+                                     ▼
+                          poll /v1/environments/work
+                                     │
+              用户在 claude.ai 网页发消息 → 路由到 worker → 处理
+```
+
+### 一次性 setup（host 机器）
+
+```bash
+git clone https://github.com/ziren28/mybox29.git && cd mybox29
+
+# 注册 bridge environment 并把所有产物存到 KMS
+KMS_KEY=<your-kms-api-key> \
+KMS_ADMIN_PASSWORD=<your-kms-admin-password> \
+OAUTH_TOKEN=$(cat /home/claude/.claude/remote/.oauth_token) \
+  ./register-bridge.sh my-machine
+```
+
+成功后 KMS 中存有：
+- `claude-bridge-env-id`
+- `claude-bridge-org-id`
+- `claude-bridge-service-key`
+
+### 任意机器启动 worker
+
+```bash
+git clone https://github.com/ziren28/mybox29.git && cd mybox29
+export KMS_KEY=<your-kms-api-key>
+./run-bridge.sh                # 默认 :1.3.1，--restart unless-stopped
+```
+
+### 环境变量（直接 docker run 不用脚本时）
+
+| 变量 | 必需 | 说明 |
+|---|---|---|
+| `ENVIRONMENT_SERVICE_KEY` | ✅ | bridge 注册返回的 `environment_secret` |
+| `ENVIRONMENT_ID` | ✅ | `env_xxx`（whoami 失败时作 fallback） |
+| `ORGANIZATION_ID` | ✅ | 组织 UUID |
+| `CLAUDE_CODE_ENVIRONMENT_RUNNER_VERSION` | 可选 | semver；镜像内置 binary 已 patch，不用设 |
+
+### Service key 失效（poll 持续 401/403）
+
+```bash
+# 在有 OAuth token 的 host 上重新跑（reuse env_id）
+KMS_KEY=<...> KMS_ADMIN_PASSWORD=<...> OAUTH_TOKEN=$(cat .../oauth_token) \
+  ./register-bridge.sh
+# 然后所有 worker 机器：
+docker restart mybox29-runner    # 容器启动时自动从 KMS 拉新 service_key
+```
+
+### OAuth token 失效（注册脚本 401）
+
+去 claude.ai 浏览器开 devtools，复制 cookie 中的 `sessionKey` 或 `/home/claude/.claude/remote/.oauth_token` 内容，更新 KMS：
+
+```bash
+KMS_ADMIN=$(curl -fsS -X POST https://kms-admin-4lo.pages.dev/api/login \
+    -H 'Content-Type: application/json' -d '{"password":"<admin>"}' | jq -r .token)
+curl -fsS -X POST https://kms-admin-4lo.pages.dev/api/secrets \
+    -H "Authorization: Bearer $KMS_ADMIN" -H "Content-Type: application/json" \
+    -d "{\"primary\":\"claude-oauth-token\",\"category\":\"claude\",\"key_data\":{\"token\":\"<NEW>\"}}"
+```
+
+### 删除 / cleanup environment
+
+如果不再需要 bridge environment：
+
+```bash
+curl -X DELETE https://api.anthropic.com/v1/environments/bridge/$ENV_ID \
+  -H "Authorization: Bearer $OAUTH_TOKEN" \
+  -H "anthropic-beta: ccr-byoc-2025-07-29,environments-2025-11-01"
+```
