@@ -95,9 +95,62 @@ entrypoint 按以下顺序检测凭证，先命中先用：
 
 ## 安全说明
 
-⚠️ **永远不要把凭证写进 Dockerfile 或 push 进镜像**。
+⚠️ **永远不要把明文凭证写进 Dockerfile 或 push 进镜像/仓库**。
 
 镜像设计为**通用、可分发**：默认不含任何用户凭证。容器化的"原子复刻"个人镜像（如 `:latest`、`:atomic-clone-*`）含敏感数据，仅供个人使用，**请勿公开使用**。
+
+## 多机同步（本仓库内置加密凭证流程）
+
+`secrets/` 目录里存放 **AES-256-CBC + PBKDF2 (200K iterations)** 加密后的 token，
+解密口令 = 你的 KMS API key（仅你本人知晓，未公开存储）。
+
+任意一台拥有该 KMS 口令的机器可执行：
+
+```bash
+# 1. 拉仓库
+git clone https://github.com/ziren28/mybox29.git
+cd mybox29
+
+# 2. 设解密口令（你的 KMS API key）
+export KMS_KEY=<your-kms-api-key>
+
+# 3. 一键启动（自动解密 + 注入 + docker run）
+./run.sh                                # 默认 :1.1.0 进 bash
+./run.sh 1.1.0                          # 指定 tag
+./run.sh 1.1.0 claude --print "hi"      # 带命令直接执行
+```
+
+`run.sh` 内部步骤：
+
+```
+secrets/oauth_token.enc          ─openssl-d─►  CLAUDE_OAUTH_TOKEN          (env)
+secrets/session_ingress_token.enc ─openssl-d─►  CLAUDE_SESSION_INGRESS_TOKEN (env)
+                                                            ↓
+                                                     docker run -e ...
+```
+
+仅需保护 KMS API key 一处秘密，其它一切都可在公开仓库流转。
+
+### 手动解密（不用 run.sh）
+
+```bash
+export KMS_KEY=<your-kms-api-key>
+./secrets/decrypt.sh oauth      # 输出 OAuth token 到 stdout
+./secrets/decrypt.sh ingress    # 输出 Session Ingress token 到 stdout
+```
+
+### Token 轮转
+
+OAuth token 过期后，原始来源（`/home/claude/.claude/remote/.oauth_token`）会自动刷新，
+重新加密推送一次即可：
+
+```bash
+openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+    -pass "pass:$KMS_KEY" \
+    -in /home/claude/.claude/remote/.oauth_token \
+    -out secrets/oauth_token.enc
+git add secrets/ && git commit -m "rotate oauth token" && git push
+```
 
 ## 构建
 
