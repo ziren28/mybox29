@@ -215,3 +215,59 @@ SQLite 3
 ## License
 
 MIT — 见 [LICENSE](./LICENSE)
+
+## ⭐ Worker 模式（`:1.2.0` / `:runner`）— 接管 Claude.ai 网页会话
+
+镜像内置 `environment-runner orchestrator`，可注册为 Claude Code on the Web 的 **self-hosted environment**，让用户在 claude.ai 网页发送的消息**直接路由到你的容器**响应。
+
+### 一次性准备：在 Anthropic 控制台拿 service key
+
+1. 登录 <https://claude.ai/settings>（必须是 organization owner / admin）
+2. 创建一个 self-hosted environment
+3. 拿到 **`ENVIRONMENT_SERVICE_KEY`**（带 `org:external_poll_sessions` scope）
+4. 记下 `environment_id` (`env_01ABC123`) 与 `organization_id` (`org_01XYZ789`)（可选，orchestrator 会通过 whoami 自动发现）
+
+### 启动 worker
+
+```bash
+docker run -d --name mybox29-runner \
+  -e ENVIRONMENT_SERVICE_KEY="esk_..." \
+  -e ENVIRONMENT_ID="env_01ABC123" \
+  -e ORGANIZATION_ID="org_01XYZ789" \
+  -v /workspace:/workspace \
+  --restart unless-stopped \
+  9527cheri/mybox29:runner
+```
+
+容器启动后会持续轮询 Anthropic API，等待来自 claude.ai 的 session 任务。任务到来时，自动 fork 一个隔离的工作进程跑 `claude` 处理消息，再把回复写回。
+
+### 工作机制
+
+```
+claude.ai 网页    ──发消息──▶  api.anthropic.com (work queue)
+                                       │
+                  poll        ─────────┘
+   ┌──────────────────────────────────┐
+   │  你的容器 9527cheri/mybox29:1.2.0 │
+   │  ENVIRONMENT_SERVICE_KEY=esk_...  │
+   │  → environment-runner orchestrator│
+   │     ↓ session 任务到来           │
+   │  → task-run (fork claude 子进程) │
+   │  → 通过 stream-json 实时双向通信  │
+   └────────────┬──────────────────────┘
+                │ session 输出
+                ▼
+          claude.ai 网页 显示响应
+```
+
+### 验证（不需要正式 service key 也能验证协议层）
+
+```bash
+docker run --rm --entrypoint /usr/local/bin/environment-manager \
+  -e ENVIRONMENT_SERVICE_KEY="<any-token>" \
+  9527cheri/mybox29:1.2.0 \
+  orchestrator --sandbox-backend none --log-level debug --skip-git-config
+```
+
+如果输出 `whoami request returned status 403` → 网络通、二进制 OK，仅是 token scope 不足  
+如果输出 `whoami request returned status 200` → service key 合格，正常进入轮询循环

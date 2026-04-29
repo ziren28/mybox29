@@ -45,7 +45,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 WORKDIR /workspace
 
 ENV MYBOX_VARIANT=generic \
-    MYBOX_VERSION=1.1.0
+    MYBOX_VERSION=1.2.0
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/bin/bash"]

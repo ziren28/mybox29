@@ -1,66 +1,59 @@
 #!/bin/bash
-# mybox29 容器入口脚本（v1.1.0：支持环境变量注入凭证）
+# mybox29 容器入口脚本（v1.2.0：支持作为 Claude Code self-hosted runner 启动）
 set -e
 
 INIT_FLAG=/var/lib/mybox29-initialized
 
 if [ ! -f "$INIT_FLAG" ]; then
-    # ── SSH host keys（每个容器实例独立） ──
     if command -v ssh-keygen >/dev/null 2>&1; then
         ssh-keygen -A >/dev/null 2>&1 || true
     fi
 
-    # ── machine-id ──
     if [ ! -s /etc/machine-id ]; then
         cat /proc/sys/kernel/random/uuid | tr -d '-' > /etc/machine-id
     fi
     mkdir -p /var/lib/dbus
     ln -sf /etc/machine-id /var/lib/dbus/machine-id
 
-    # ── 工作目录 ──
     mkdir -p /workspace
-
     touch "$INIT_FLAG"
 fi
 
-# ── 凭证注入（每次启动都执行，支持 token 轮转） ──────────────────────
-# 优先级：env var > /run/secrets > 已挂载文件
+# ── Claude OAuth/Ingress 凭证注入（独立调用模式用） ─────────────
 CLAUDE_REMOTE_DIR=/home/claude/.claude/remote
-mkdir -p "$CLAUDE_REMOTE_DIR"
-chmod 700 "$CLAUDE_REMOTE_DIR"
+mkdir -p "$CLAUDE_REMOTE_DIR" && chmod 700 "$CLAUDE_REMOTE_DIR"
 
 write_token() {
-    local content="$1" target="$2"
-    if [ -n "$content" ]; then
-        printf '%s' "$content" > "$target"
-        chmod 600 "$target"
-        return 0
-    fi
-    return 1
+    [ -n "$1" ] && { printf '%s' "$1" > "$2"; chmod 600 "$2"; }
 }
-
-# OAuth token（必需）
-if [ -n "$CLAUDE_OAUTH_TOKEN" ]; then
-    write_token "$CLAUDE_OAUTH_TOKEN" "$CLAUDE_REMOTE_DIR/.oauth_token"
-elif [ -r /run/secrets/claude_oauth_token ]; then
-    cp /run/secrets/claude_oauth_token "$CLAUDE_REMOTE_DIR/.oauth_token"
-    chmod 600 "$CLAUDE_REMOTE_DIR/.oauth_token"
-fi
-
-# Session ingress token（必需）
-if [ -n "$CLAUDE_SESSION_INGRESS_TOKEN" ]; then
-    write_token "$CLAUDE_SESSION_INGRESS_TOKEN" "$CLAUDE_REMOTE_DIR/.session_ingress_token"
-elif [ -r /run/secrets/claude_session_ingress_token ]; then
-    cp /run/secrets/claude_session_ingress_token "$CLAUDE_REMOTE_DIR/.session_ingress_token"
-    chmod 600 "$CLAUDE_REMOTE_DIR/.session_ingress_token"
-fi
+write_token "$CLAUDE_OAUTH_TOKEN"            "$CLAUDE_REMOTE_DIR/.oauth_token"
+write_token "$CLAUDE_SESSION_INGRESS_TOKEN"  "$CLAUDE_REMOTE_DIR/.session_ingress_token"
+[ -r /run/secrets/claude_oauth_token ]            && cp /run/secrets/claude_oauth_token            "$CLAUDE_REMOTE_DIR/.oauth_token" && chmod 600 "$CLAUDE_REMOTE_DIR/.oauth_token"
+[ -r /run/secrets/claude_session_ingress_token ]  && cp /run/secrets/claude_session_ingress_token  "$CLAUDE_REMOTE_DIR/.session_ingress_token" && chmod 600 "$CLAUDE_REMOTE_DIR/.session_ingress_token"
 
 # ── 可选 daemon ──
 [ "${START_POSTGRES:-0}" = "1" ] && pg_ctlcluster 16 main start >/dev/null 2>&1 || true
 [ "${START_REDIS:-0}"    = "1" ] && redis-server --daemonize yes --bind 0.0.0.0 --protected-mode no >/dev/null 2>&1 || true
 [ "${START_DOCKER:-0}"   = "1" ] && [ ! -S /var/run/docker.sock ] && (dockerd >/var/log/dockerd.log 2>&1 &) || true
 
-# ── 欢迎 banner ──
+# ── ★ Self-hosted runner 模式 ★ ──────────────────────────────────
+# 如果设了 ENVIRONMENT_SERVICE_KEY，启动 orchestrator 接管 Claude.ai 网页发来的会话
+if [ -n "$ENVIRONMENT_SERVICE_KEY" ]; then
+    echo "[mybox29] 启动 self-hosted runner（orchestrator 模式）"
+    echo "[mybox29] environment_id=${ENVIRONMENT_ID:-<auto whoami>}"
+    echo "[mybox29] organization_id=${ORGANIZATION_ID:-<auto whoami>}"
+
+    ARGS=(orchestrator)
+    [ -n "$ENVIRONMENT_ID"  ] && ARGS+=(--environment-id  "$ENVIRONMENT_ID")
+    [ -n "$ORGANIZATION_ID" ] && ARGS+=(--organization-id "$ORGANIZATION_ID")
+    [ "${SANDBOX_BACKEND:-none}" = "none" ] && ARGS+=(--sandbox-backend none)
+    [ "${SKIP_GIT_CONFIG:-1}" = "1" ] && ARGS+=(--skip-git-config)
+
+    cd /workspace
+    exec /usr/local/bin/environment-manager "${ARGS[@]}"
+fi
+
+# ── 否则进入交互/CLI 模式 ──
 if [ -t 0 ] && [ -t 1 ] && [ -z "$MYBOX_QUIET" ]; then
     cat <<'BANNER'
 ╔══════════════════════════════════════════════════════════════════╗
@@ -73,10 +66,9 @@ if [ -t 0 ] && [ -t 1 ] && [ -z "$MYBOX_QUIET" ]; then
 ║  Tools:  Git · Docker CLI · psql · redis-cli · sqlite3           ║
 ║  Claude: claude --print "..."   (auto-detect creds)              ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  Inject creds:  -e CLAUDE_OAUTH_TOKEN=...                        ║
-║                 -e CLAUDE_SESSION_INGRESS_TOKEN=...              ║
-║  START_POSTGRES=1 / START_REDIS=1 / START_DOCKER=1               ║
-║  MYBOX_QUIET=1 to hide this banner                               ║
+║  独立调用模式: -e CLAUDE_OAUTH_TOKEN/CLAUDE_SESSION_INGRESS_TOKEN ║
+║  Worker 模式:  -e ENVIRONMENT_SERVICE_KEY=esk_...                ║
+║                (claude.ai/settings 创建 self-hosted environment) ║
 ╚══════════════════════════════════════════════════════════════════╝
 BANNER
 fi
