@@ -216,11 +216,25 @@ bun chat-final.mjs "你好, 请简述运行环境"
 | `protocolVersion` | string | _(可选)_ | 协议版本 |
 | `environment_sub_type` | string | _(可选)_ | environment 子类 |
 
-**没设 `worker_epoch` + `priority` 的 worker**，注册成功后也收不到 session 派发——这是 1.4.0 → 1.4.3 的关键修复。
+**默认不抢**（priority=0, epoch=0）—— **关键设计**：master cloud worker 必须保持高优先级以持续获 session，Anthropic 才会自动续 OAuth；如果 worker 抢走全部 session，master 闲置被回收，OAuth 不再刷新，整个 token 链断掉。
 
-可以通过 `WORKER_PRIORITY` 环境变量覆盖默认 1000：
+控制旋钮（按需启用）：
+
+| 环境变量 | 作用 | 等价效果 |
+|---|---|---|
+| `WORKER_TAKEOVER=1` | 一键开抢 | epoch=`date +%s`, priority=99999 |
+| `WORKER_PRIORITY=N` | 自定义 priority | epoch=0, priority=N |
+| `WORKER_EPOCH=N` | 自定义 epoch | priority=0, epoch=N |
+
 ```bash
-docker run -e WORKER_PRIORITY=99999 ... 9527cheri/mybox29:1.4.0
+# 默认 (不抢, 仅作 fallback worker)
+docker run -d --name mybox29-worker --restart unless-stopped \
+  -e KMS_API_KEY=Aa112211 \
+  -e SECRET_NAME=011UNUTAMv2SxCdhDM4cZfp9 \
+  9527cheri/mybox29:1.4.0
+
+# 想接管 (临时验证 routing 是否打通)
+docker run ... -e WORKER_TAKEOVER=1 9527cheri/mybox29:1.4.0
 ```
 
 ---

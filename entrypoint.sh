@@ -60,15 +60,25 @@ if [ -n "${KMS_API_KEY:-}" ] && [ -n "${SECRET_NAME:-}" ]; then
     }
 
     register_bridge() {
-        local epoch
-        epoch=$(date +%s)
+        # 默认不抢: priority=0 + epoch=0
+        # master host 必须保持高优先级以持续获 session, 才能让 Anthropic 自动续 OAuth.
+        # 想接管特定 session: 设 WORKER_TAKEOVER=1 (一键拉爆) 或单独设 WORKER_PRIORITY/WORKER_EPOCH.
+        local epoch priority
+        if [ "${WORKER_TAKEOVER:-0}" = "1" ]; then
+            epoch=$(date +%s)
+            priority=99999
+        else
+            epoch="${WORKER_EPOCH:-0}"
+            priority="${WORKER_PRIORITY:-0}"
+        fi
+        log "register-bridge with epoch=$epoch priority=$priority (takeover=${WORKER_TAKEOVER:-0})"
         curl -fsS -X POST "https://api.anthropic.com/v1/environments/bridge" \
             -H "Authorization: Bearer $1" \
             -H "Content-Type: application/json" \
             -H "anthropic-version: 2023-06-01" \
             -H "anthropic-beta: ccr-byoc-2025-07-29,environments-2025-11-01" \
             -H "x-environment-runner-version: 2.1.123" \
-            -d "$(jq -n --arg env "$BRIDGE_ENV_ID" --argjson ep "$epoch" --arg pri "${WORKER_PRIORITY:-1000}" '{
+            -d "$(jq -n --arg env "$BRIDGE_ENV_ID" --argjson ep "$epoch" --argjson pri "$priority" '{
                 machine_name: ($ENV.HOSTNAME // "mybox29"),
                 directory: "/workspace",
                 branches: ["main"],
@@ -76,7 +86,7 @@ if [ -n "${KMS_API_KEY:-}" ] && [ -n "${SECRET_NAME:-}" ]; then
                 environment_id: $env,
                 worker_id: ($ENV.HOSTNAME // "mybox29"),
                 worker_epoch: $ep,
-                priority: ($pri | tonumber),
+                priority: $pri,
                 metadata: {worker_type: "docker_container"}
             }')"
     }
