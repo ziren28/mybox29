@@ -15,34 +15,108 @@
 
 ---
 
-## 整体架构（两个对称的 docker 命令）
+## 整体架构
 
+```mermaid
+flowchart LR
+    user["👤 用户<br/>浏览器 / 终端"]
+
+    subgraph master ["🏠 Master Host (Anthropic Cloud)"]
+        direction TB
+        mc["Master Claude<br/>cloud worker session"]
+        sh["synchome 容器<br/>cron */10"]
+        oauth["/home/claude/.claude/<br/>remote/.oauth_token"]
+        mc -.读取.-> oauth
+        sh -.读取.-> oauth
+    end
+
+    kms[("🔑 KMS<br/>kms-admin-4lo.pages.dev<br/>多租户 token 存储")]
+
+    subgraph worker ["⚙️ Worker (任意 VPS)"]
+        wk["mybox29:1.4.5<br/>BYOC orchestrator"]
+    end
+
+    subgraph api ["🌐 Chat-API (任意 VPS)"]
+        ca["chat-api:latest<br/>HTTP :3000"]
+    end
+
+    user -- "💬 网页消息" --> mc
+    mc -- "🚀 BYOC 路由" --> wk
+    wk -- "📤 流式回复" --> user
+
+    sh == "🔄 oauth 每 10min" ==> kms
+    kms == "🔑 拉 token" ==> wk
+    wk -. "register-bridge<br/>每 30min" .-> kms
+
+    user -.-> ca
+    ca -. "/chat<br/>/create-env" .-> mc
+    ca -. "/refresh" .-> kms
+
+    classDef anthropic fill:#fff5e6,stroke:#d97706
+    classDef storage   fill:#e0f2fe,stroke:#0284c7
+    classDef compute   fill:#dcfce7,stroke:#16a34a
+    classDef service   fill:#f3e8ff,stroke:#9333ea
+    class master anthropic
+    class kms storage
+    class worker compute
+    class api service
 ```
-   ┌──── Master Host (你的某个 claude.ai 容器) ────┐
-   │  docker run synchome                          │
-   │   ├─ cron */10                                │
-   │   ├─ 读 /home/claude/.claude/remote/.oauth_*  │
-   │   └─ POST KMS                                 │
-   └────────────────────┬──────────────────────────┘
-                        │
-                        ▼
-              ┌─────────────────┐
-              │   KMS           │ ← oauth_token 永远 fresh
-              │   primary=$NAME │   (由 synchome cron 续约)
-              └────────┬────────┘
-                       │
-                       ▼
-   ┌──── Worker (任意 VPS) ─────────────────────┐
-   │  docker run 9527cheri/mybox29:1.4.0       │
-   │   ├─ KMS 拉 oauth                          │
-   │   ├─ register-bridge → service_key         │
-   │   └─ exec orchestrator                     │
-   │       ↑                                    │
-   │       └── 接收 claude.ai 网页消息 → 处理   │
-   └────────────────────────────────────────────┘
-```
+
+**三种角色**：
+
+| 角色 | 镜像 | 部署在 | 职责 |
+|---|---|---|---|
+| 🏠 Master | `9527cheri/sync-home:latest` | Anthropic 云端 master session | 持续刷 OAuth, cron 同步到 KMS |
+| ⚙️ Worker | `9527cheri/mybox29:1.4.5` | 你的 VPS | 拉 KMS token, register-bridge, 处理网页消息 |
+| 🌐 Chat-API | `9527cheri/chat-api:latest` | 你的 VPS（可选） | HTTP API 化 BYOC 协议, 任何语言可调 |
 
 **关键发现（实测）**：claude.ai BYOC events API 仅需 `sessionKey` 一个 cookie，CF 不挑战 POST/GET。整个系统不依赖任何 cf_clearance / 浏览器 / playwright。
+
+### Token 链路
+
+```mermaid
+sequenceDiagram
+    participant A as Anthropic OAuth
+    participant M as Master Claude
+    participant S as synchome (cron */10)
+    participant K as KMS
+    participant W as Worker
+    participant B as Bridge API
+
+    loop 每 10 分钟
+        A->>M: fd 注入新 oauth_token
+    end
+
+    loop 每 10 分钟 (cron)
+        S->>M: 读 .oauth_token / .session_ingress_token
+        S->>K: POST /api/secrets (oauth + ingress)
+    end
+
+    Note over W: 启动时 / 401 重试时
+    W->>K: GET /api/secrets?primary=...
+    K-->>W: oauth_token (108B)
+    W->>B: POST /v1/environments/bridge
+    B-->>W: service_key (~30min TTL)
+    W->>W: exec orchestrator → 持续 long-poll
+```
+
+### 消息路由（claude.ai 网页 → 你的 worker）
+
+```mermaid
+sequenceDiagram
+    participant U as 用户浏览器
+    participant CA as claude.ai
+    participant W as Worker (mybox29 容器)
+    participant CC as 容器内 claude CLI
+
+    U->>CA: 创建 BYOC session (绑定 env_xxx)
+    U->>CA: POST /v1/sessions/.../events (user message)
+    CA->>W: orchestrator long-poll 拿到任务
+    W->>CC: exec claude --task
+    CC-->>W: 流式 events (thinking / text / tool_use / tool_result)
+    W-->>CA: POST 流式 events
+    CA-->>U: WSS subscribe 推送
+```
 
 ---
 
@@ -131,17 +205,124 @@ docker run -d --name chat-api --restart unless-stopped \
 #   -v /etc/ssl/certs:/etc/ssl/certs:ro
 ```
 
-端点：
+### 端点速查
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| GET | `/health` | 健康 + 默认值检查 |
-| POST | `/chat` | 发消息（自动建 session 或用已有 session_id） |
-| POST | `/create-env` | 创建 anthropic_cloud environment |
-| POST | `/refresh` | 从 KMS 拉 fresh token |
+| GET | `/health` | 健康检查 + 默认值 |
+| POST | `/chat` | 发消息（自动建 session 或用已有 `session_id`） |
+| POST | `/create-env` | 创建 `anthropic_cloud` environment |
+| POST | `/refresh` | 从 KMS 拉 fresh oauth + ingress |
 | POST | `/events` | 低层 events POST/GET 透传 |
 
-完整字段参考 `chat-api.mjs` 注释。一键端到端 demo 见 `e2e-demo.sh`。
+### 请求示例
+
+#### 1. 创建一个新 environment
+
+```bash
+curl -X POST http://localhost:3000/create-env \
+  -H "content-type: application/json" \
+  -d '{
+    "cookie": "sk-ant-sid02-...",
+    "name": "my-workspace",
+    "languages": [
+      { "name": "python", "version": "3.11" },
+      { "name": "node",   "version": "20"   }
+    ]
+  }'
+# → {"environment_id":"env_xxxxxxxxxxxxxxxxxxxxxxxx","raw":{...}}
+```
+
+#### 2. 发消息（自动建 session）
+
+```bash
+curl -X POST http://localhost:3000/chat \
+  -H "content-type: application/json" \
+  -d '{
+    "cookie": "sessionKey=sk-ant-sid02-...; anthropic-device-id=...; lastActiveOrg=...",
+    "environment_id": "env_xxxxxxxxxxxxxxxxxxxxxxxx",
+    "title": "untitle",
+    "model": "claude-sonnet-4-6",
+    "thinking": true,
+    "allowed_tools": ["Bash", "Read", "Write", "WebFetch", "WebSearch"],
+    "append_system_prompt": "你是临时测试助手, 简短回报结果",
+    "prompt": "uname -a && whoami",
+    "timeout_ms": 60000
+  }'
+# → {"session_id","secret_name","reply","thinking","tool_uses","duration_ms","completed","view_url"}
+```
+
+#### 3. 发消息（复用已有 session）
+
+```bash
+curl -X POST http://localhost:3000/chat \
+  -H "content-type: application/json" \
+  -d '{
+    "cookie": "sk-ant-sid02-...",
+    "session_id": "session_xxxxxxxxxxxxxxxxxxxxxxxx",
+    "prompt": "继续刚才的任务",
+    "thinking": false
+  }'
+```
+
+#### 4. 拉 KMS token
+
+```bash
+curl -X POST http://localhost:3000/refresh \
+  -H "content-type: application/json" \
+  -d '{
+    "kms_api_key": "Aa112211",
+    "secret_name": "011UNUTAMv2SxCdhDM4cZfp9"
+  }'
+# → {"primary","oauth_token","ingress_token","updated_at","time"}
+```
+
+#### 5. 低层透传 events
+
+```bash
+# GET 拉历史事件
+curl -X POST http://localhost:3000/events \
+  -H "content-type: application/json" \
+  -d '{
+    "cookie": "sk-ant-sid02-...",
+    "session_id": "session_xxx",
+    "action": "get",
+    "sort_order": "desc",
+    "limit": 50
+  }'
+
+# POST 自定义 event 列表
+curl -X POST http://localhost:3000/events \
+  -H "content-type: application/json" \
+  -d '{
+    "cookie": "sk-ant-sid02-...",
+    "session_id": "session_xxx",
+    "action": "post",
+    "events": [{...}]
+  }'
+```
+
+### /chat 完整字段
+
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| `cookie` | string | `.env` SESSION_KEY | sessionKey 单值 或 浏览器整段 cookie 串 |
+| `prompt` | string | _(必填)_ | 用户消息文本 |
+| `session_id` | string | _(自动建)_ | 复用现有 session_xxx |
+| `environment_id` | string | `.env` BRIDGE_ENV_ID | 自动建 session 时必需 |
+| `model` | string | `claude-sonnet-4-6` | 仅新建 session 生效 |
+| `thinking` | bool | `true` | 启用 thinking budget 8192 |
+| `append_system_prompt` | string | _(空)_ | 注入 system prompt |
+| `allowed_tools` | array | _(全开)_ | 工具白名单 |
+| `title` | string | 时间戳 | 仅新建 session 生效 |
+| `org_id` | string | `.env` ORG_ID | organization UUID |
+| `client_sha` | string | _(从 cookie 自动抽)_ | `anthropic-client-sha` 头 |
+| `full_beta` | bool | `true` | 用完整 magic beta header 集 |
+| `timeout_ms` | int | 120000 | 轮询超时 |
+
+支持 prompt 里 `{{session_id}}` / `{{secret_name}}` 占位符（server 创建 session 后回填）。
+
+一键端到端 demo 见 [`e2e-demo.sh`](e2e-demo.sh)。
 
 ---
 
