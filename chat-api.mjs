@@ -39,14 +39,25 @@ const DEFAULT_KMS   = process.env.KMS_URL ?? "https://kms-admin-4lo.pages.dev";
 
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120";
 
-const headersFor = (sk, org) => ({
+// 完整 magic beta header 集 (来自浏览器抓包)
+const MAGIC_BETA = [
+    "ccr-byoc-2025-07-29",
+    "claude-code-20250219",
+    "interleaved-thinking-2025-05-14",
+    "context-management-2025-06-27",
+    "effort-2025-11-24",
+].join(",");
+
+const headersFor = (sk, org, opts = {}) => ({
     "anthropic-version":         "2023-06-01",
-    "anthropic-beta":            "ccr-byoc-2025-07-29",
+    "anthropic-beta":            opts.full_beta ? MAGIC_BETA : "ccr-byoc-2025-07-29",
     "anthropic-client-feature":  "ccr",
     "anthropic-client-platform": "web_claude_ai",
     "x-organization-uuid":       org,
     "user-agent":                UA,
     "Cookie":                    `sessionKey=${sk}`,
+    ...(opts.client_sha && { "anthropic-client-sha": opts.client_sha }),
+    ...(opts.direct_browser && { "anthropic-dangerous-direct-browser-access": "true" }),
 });
 
 const json = (obj, status = 200) =>
@@ -60,27 +71,38 @@ async function handleChat(req) {
     let body;
     try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
 
-    const sk    = body.cookie ?? body.session_key ?? DEFAULT_SK;
-    const org   = body.org_id ?? DEFAULT_ORG;
-    const envId = body.environment_id ?? DEFAULT_ENV;
-    const model = body.model ?? "claude-sonnet-4-6";
-    const think = body.thinking !== false;
-    const prompt= body.prompt ?? body.text ?? "";
+    const sk     = body.cookie ?? body.session_key ?? DEFAULT_SK;
+    const org    = body.org_id ?? DEFAULT_ORG;
+    const envId  = body.environment_id ?? DEFAULT_ENV;
+    const model  = body.model ?? "claude-sonnet-4-6";
+    const think  = body.thinking !== false;
+    const prompt = body.prompt ?? body.text ?? "";
     const TIMEOUT = +(body.timeout_ms ?? 120000);
-    let sid     = body.session_id ?? null;
+    let sid      = body.session_id ?? null;
+
+    // 高级 session_context 选项 (创建新会话时生效, 已有 session 忽略)
+    const appendSystemPrompt = body.append_system_prompt ?? null;
+    const allowedTools       = body.allowed_tools ?? null;  // 例: ["Bash","Read","Write","WebFetch","WebSearch"]
+    const clientSha          = body.client_sha ?? null;
+    const fullBeta           = body.full_beta !== false;    // 默认开
 
     if (!sk)     return json({ error: "cookie (sessionKey) required" }, 400);
     if (!prompt) return json({ error: "prompt required" }, 400);
 
-    const HEADERS = headersFor(sk, org);
+    const HEADERS = headersFor(sk, org, { full_beta: fullBeta, client_sha: clientSha, direct_browser: true });
 
-    // 1. 没传 session_id → 创建新会话
+    // 1. 没传 session_id → 创建新会话 (含 append_system_prompt + allowed_tools)
     if (!sid) {
+        const sessionContext = { model, sources: [], outcomes: [] };
+        if (appendSystemPrompt) sessionContext.append_system_prompt = appendSystemPrompt;
+        if (allowedTools)       sessionContext.allowed_tools         = allowedTools;
+
         const createBody = {
-            title: body.title ?? `API session ${new Date().toISOString().slice(0, 19)}`,
-            session_context: { model, sources: [], outcomes: [] },
+            title:           body.title ?? `API session ${new Date().toISOString().slice(0, 19)}`,
+            session_context: sessionContext,
         };
         if (envId) createBody.environment_id = envId;
+
         const cr = await fetch("https://claude.ai/v1/sessions", {
             method:  "POST",
             headers: { ...HEADERS, "content-type": "application/json" },
@@ -290,7 +312,11 @@ const server = Bun.serve({
             return new Response(`mybox29 chat-api
 endpoints:
   GET  /health
-  POST /chat        {cookie?, session_id?, prompt, thinking?, environment_id?, model?, timeout_ms?}
+  POST /chat        {
+    cookie?, session_id?, prompt, thinking?, environment_id?, model?,
+    append_system_prompt?, allowed_tools?[], client_sha?, full_beta?,
+    title?, timeout_ms?, org_id?
+  }
   POST /create-env  {cookie?, name?, languages?[], cwd?, init_script?, environment?, network_config?}
   POST /refresh     {kms_api_key?, secret_name?, kms_url?}
   POST /events      {cookie?, session_id, action=post|get, events?[], sort_order?, limit?}
