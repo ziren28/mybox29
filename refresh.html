@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>mybox29 · Token Refresh</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", sans-serif; max-width: 720px; margin: 40px auto; padding: 20px; line-height: 1.7; color: #1f2937; }
+  h1 { color: #2563eb; }
+  pre { background: #f3f4f6; padding: 10px 14px; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+  button { background: #2563eb; color: #fff; border: 0; padding: 10px 20px; border-radius: 6px; font-size: 15px; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  .ok { color: #16a34a; font-weight: 600; }
+  .err { color: #dc2626; font-weight: 600; }
+  .step { background: #fef3c7; padding: 12px 16px; border-left: 4px solid #f59e0b; margin: 12px 0; border-radius: 4px; }
+  input { width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 4px; font-family: monospace; font-size: 13px; }
+  label { display: block; margin: 12px 0 4px; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>🔑 mybox29 · Token Refresh</h1>
+
+<p>把当前 claude.ai 浏览器登录态里的凭证一键上传到 KMS，自主容器立刻拉到新值。</p>
+
+<div class="step">
+  <strong>Step 1.</strong> 确保你在<strong>同一浏览器</strong>已登录 <a href="https://claude.ai" target="_blank">claude.ai</a>（这一页用 cookie，必须同源） — <em>本页务必托管在 claude.ai 域名下，否则受 CORS 限制无法读 cookie</em>。
+</div>
+
+<div class="step">
+  <strong>Step 2.</strong> 输入你的 KMS 写权限密码（不会保存到本地）：
+  <label>KMS Admin Password</label>
+  <input id="adminPw" type="password" placeholder="Aa112211">
+</div>
+
+<button onclick="refresh()">🚀 刷新 Token 到 KMS</button>
+
+<pre id="log">等待操作…</pre>
+
+<hr style="margin: 30px 0;">
+
+<h2>Bookmarklet（更快 · 一键版）</h2>
+<p>把下面的链接拖到浏览器书签栏，登录 claude.ai 后点一下书签，token 立刻刷新到 KMS：</p>
+
+<p><a href="javascript:(async()=>{const pw=prompt('KMS Admin Password');if(!pw)return;try{const r=await fetch('https://claude.ai/api/account',{credentials:'include'});const a=await r.json();const sk=document.cookie.split(';').map(s=>s.trim()).find(s=>s.startsWith('sessionKey='))?.slice(11);const adm=await fetch('https://kms-admin-4lo.pages.dev/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})}).then(r=>r.json());const tok=adm.token;await fetch('https://kms-admin-4lo.pages.dev/api/secrets',{method:'POST',headers:{'Authorization':'Bearer '+tok,'Content-Type':'application/json'},body:JSON.stringify({primary:'claude-session-key',category:'claude',description:'Browser sessionKey for OAuth refresh',key_data:{token:sk}})});alert('✅ sessionKey ('+sk.length+'B) uploaded to KMS as claude-session-key');}catch(e){alert('❌ '+e.message)}})();" id="bm">📌 Refresh mybox29 Token</a></p>
+
+<small style="color:#6b7280">右键 → 添加到书签栏。每次需要刷新时点一下，输入 KMS 密码即可。</small>
+
+<script>
+async function refresh() {
+  const log = document.getElementById('log');
+  const pw = document.getElementById('adminPw').value;
+  if (!pw) { log.innerHTML = '<span class="err">需要 KMS Admin 密码</span>'; return; }
+
+  const append = (msg, cls='') => log.innerHTML += `\n<span class="${cls}">${msg}</span>`;
+  log.innerText = '';
+
+  try {
+    append('1. 读取浏览器 sessionKey…');
+    const sk = document.cookie.split(';').map(s=>s.trim()).find(s=>s.startsWith('sessionKey='))?.slice(11);
+    if (!sk) throw new Error('未找到 sessionKey cookie，请先登录 claude.ai');
+    append(`   sessionKey: ${sk.length} 字节 ✓`, 'ok');
+
+    append('2. 拉取账号信息确认 cookie 有效…');
+    const acc = await fetch('https://claude.ai/api/account', { credentials: 'include' }).then(r=>r.json());
+    append(`   account: ${acc.email_address || acc.uuid} ✓`, 'ok');
+
+    append('3. 登录 KMS Admin…');
+    const adm = await fetch('https://kms-admin-4lo.pages.dev/api/login', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({password: pw})
+    }).then(r=>r.json());
+    if (!adm.token) throw new Error('KMS login failed');
+    append('   admin token ✓', 'ok');
+
+    append('4. 上传 sessionKey 到 KMS（primary=claude-session-key）…');
+    await fetch('https://kms-admin-4lo.pages.dev/api/secrets', {
+      method: 'POST',
+      headers: {'Authorization':'Bearer '+adm.token, 'Content-Type':'application/json'},
+      body: JSON.stringify({
+        primary: 'claude-session-key',
+        category: 'claude',
+        description: 'Browser sessionKey for OAuth refresh',
+        key_data: { token: sk }
+      })
+    });
+    append('   ✅ KMS 已更新，自主容器下一次 watchdog 周期会自动续约', 'ok');
+  } catch (e) {
+    append('❌ ' + e.message, 'err');
+  }
+}
+</script>
+</body>
+</html>
