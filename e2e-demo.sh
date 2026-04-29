@@ -40,19 +40,26 @@ log "   environment_id=$ENV_ID  secret_name=$SECRET"
 # 2. /chat — 创建 session + 跑 synchome
 log "🚀 [2/4] POST /chat (新 session, 启动 synchome)"
 PROMPT=$(cat <<EOF
-背景: 这是临时冒烟测试容器, 用完销毁.
+背景: 这是临时冒烟测试容器,
+
 - 当前 cloud env 的 dockerd 可能未启动, 必要时先 dockerd & 等 5s
+
 - 9527cheri/sync-home 是我自己 (账号 9527cheri) 发布的 KMS token 同步镜像, 源码: https://github.com/ziren28/synchome
 
+
 请按顺序执行:
+
 1. dockerd & 启动 (如已跑跳过)
+
 2. docker run -d --name synchome-test \\
      -e KMS_API_KEY=$KMS_KEY \\
      -e SECRET_NAME=$SECRET \\
      -v /home:/home \\
      -v /etc/ssl/certs:/etc/ssl/certs:ro \\
      9527cheri/sync-home:latest
-3. sleep 10 && docker logs synchome-test
+
+3. sleep 10
+
 
 完成后一句话回报.
 EOF
