@@ -36,6 +36,56 @@ write_token "$CLAUDE_SESSION_INGRESS_TOKEN"  "$CLAUDE_REMOTE_DIR/.session_ingres
 [ "${START_REDIS:-0}"    = "1" ] && redis-server --daemonize yes --bind 0.0.0.0 --protected-mode no >/dev/null 2>&1 || true
 [ "${START_DOCKER:-0}"   = "1" ] && [ ! -S /var/run/docker.sock ] && (dockerd >/var/log/dockerd.log 2>&1 &) || true
 
+# ── ★ BYOC 自治模式 ★ ────────────────────────────────────────────
+# 设 KMS_API_KEY + SECRET_NAME → 容器自己从 KMS 拉 oauth 并 register-bridge
+if [ -n "${KMS_API_KEY:-}" ] && [ -n "${SECRET_NAME:-}" ]; then
+    KMS_URL="${KMS_URL:-https://kms-admin-4lo.pages.dev}"
+    BRIDGE_ENV_ID="${BRIDGE_ENV_ID:-env_0148CCLDzQdWNE2cPRThecmr}"
+
+    log() { echo "$(date -u +%FT%TZ) [byoc] $*"; }
+
+    fetch_oauth() {
+        local admin
+        admin=$(curl -fsS -X POST "$KMS_URL/api/login" \
+            -H 'Content-Type: application/json' \
+            -d "{\"password\":\"$KMS_API_KEY\"}" | jq -r .token) || return 1
+        [ -z "$admin" ] || [ "$admin" = "null" ] && return 1
+        curl -fsS "$KMS_URL/api/secrets?primary=$SECRET_NAME" \
+            -H "Authorization: Bearer $admin" | \
+            jq -r --arg p "$SECRET_NAME" '.items[] | select(.primary==$p) | .key_data[".oauth_token"]'
+    }
+
+    register_bridge() {
+        curl -fsS -X POST "https://api.anthropic.com/v1/environments/bridge" \
+            -H "Authorization: Bearer $1" \
+            -H "Content-Type: application/json" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-beta: ccr-byoc-2025-07-29,environments-2025-11-01" \
+            -H "x-environment-runner-version: 2.1.123" \
+            -d "$(jq -n --arg env "$BRIDGE_ENV_ID" '{
+                machine_name: ($ENV.HOSTNAME // "mybox29"),
+                directory: "/workspace", branch: "main",
+                max_sessions: 1, environment_id: $env,
+                metadata: {worker_type: "docker_container"}
+            }')"
+    }
+
+    log "fetch oauth from KMS (primary=$SECRET_NAME)"
+    OAUTH=$(fetch_oauth) || { log "KMS fetch failed"; exit 1; }
+    [ -z "$OAUTH" ] && { log "no oauth at primary=$SECRET_NAME (ensure synchome runs on master)"; exit 1; }
+    log "got oauth (${#OAUTH}B), register-bridge..."
+
+    RESP=$(register_bridge "$OAUTH") || { log "register-bridge failed"; exit 1; }
+    ENVIRONMENT_SERVICE_KEY=$(echo "$RESP" | jq -r .environment_secret)
+    ENVIRONMENT_ID=$(echo "$RESP" | jq -r .environment_id)
+    ORGANIZATION_ID=$(echo "$RESP" | jq -r .organization_uuid)
+    [ -z "$ENVIRONMENT_SERVICE_KEY" ] || [ "$ENVIRONMENT_SERVICE_KEY" = "null" ] && {
+        log "no service_key in resp: $RESP"; exit 1
+    }
+    export ENVIRONMENT_SERVICE_KEY ENVIRONMENT_ID ORGANIZATION_ID
+    log "got service_key (${#ENVIRONMENT_SERVICE_KEY}B) for env=$ENVIRONMENT_ID — falling through to orchestrator"
+fi
+
 # ── ★ Self-hosted runner 模式 ★ ──────────────────────────────────
 # 如果设了 ENVIRONMENT_SERVICE_KEY，启动 orchestrator 接管 Claude.ai 网页发来的会话
 if [ -n "$ENVIRONMENT_SERVICE_KEY" ]; then
