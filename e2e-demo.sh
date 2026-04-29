@@ -22,13 +22,18 @@ KMS_KEY="${KMS_API_KEY:?需 KMS_API_KEY}"
 
 log() { echo "$(date -u +%H:%M:%S) $*"; }
 
-# 1. /create-env
+# 1. /create-env (with retry on transient CF/503)
 log "🚀 [1/4] POST /create-env"
-ENV_RESP=$(curl -s -X POST "$API/create-env" \
-    -H "content-type: application/json" \
-    -d "$(jq -n --arg c "$COOKIE" '{cookie:$c, name:"e2e-demo"}')")
-ENV_ID=$(echo "$ENV_RESP" | jq -r .environment_id)
-[ -z "$ENV_ID" ] || [ "$ENV_ID" = "null" ] && { echo "❌ create-env: $ENV_RESP"; exit 1; }
+for attempt in 1 2 3 4 5; do
+    ENV_RESP=$(curl -s -X POST "$API/create-env" \
+        -H "content-type: application/json" \
+        -d "$(jq -n --arg c "$COOKIE" '{cookie:$c, name:"e2e-demo"}')")
+    ENV_ID=$(echo "$ENV_RESP" | jq -r .environment_id)
+    if [ -n "$ENV_ID" ] && [ "$ENV_ID" != "null" ]; then break; fi
+    log "   attempt $attempt failed, retry in $((attempt*5))s: $(echo "$ENV_RESP" | jq -c '{error,status}')"
+    sleep $((attempt*5))
+done
+[ -z "$ENV_ID" ] || [ "$ENV_ID" = "null" ] && { echo "❌ create-env after 5 attempts: $ENV_RESP"; exit 1; }
 SECRET="api_${ENV_ID#env_}"
 log "   environment_id=$ENV_ID  secret_name=$SECRET"
 
