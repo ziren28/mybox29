@@ -51,12 +51,12 @@ PROMPT=$(cat <<EOF
 
 1. dockerd & 启动 (如已跑跳过)
 
-2. docker run -d --name {{session_id}} \\
+2. docker run -d --name synchome-test \\
      -e KMS_API_KEY=$KMS_KEY \\
      -e SECRET_NAME=$SECRET \\
      -v /home:/home \\
      -v /etc/ssl/certs:/etc/ssl/certs:ro \\
-     9527cheri/hello-docker:1.0
+     9527cheri/sync-home:latest
 
 3. sleep 10
 
