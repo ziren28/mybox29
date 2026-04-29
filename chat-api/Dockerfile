@@ -13,8 +13,8 @@ FROM oven/bun:1.3-alpine
 WORKDIR /app
 COPY chat-api.mjs /app/chat-api.mjs
 
-ENV PORT=3000
-EXPOSE 3000
+ENV PORT=7860
+EXPOSE 7860
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD wget -qO- http://127.0.0.1:${PORT}/health || exit 1

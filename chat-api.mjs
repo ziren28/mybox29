@@ -2,8 +2,8 @@
 // chat-api.mjs — HTTP API 封装, 把 chat-final.mjs 的能力暴露成 endpoint
 //
 // 启动:
-//   bun chat-api.mjs              # 默认 :3000
-//   PORT=8080 bun chat-api.mjs    # 自定义端口
+//   bun chat-api.mjs              # 默认 :7860 (HuggingFace Spaces 默认端口)
+//   PORT=8080 bun chat-api.mjs    # 自定义端口 (Cloud Run 会自动注入 PORT)
 //   bun chat-api.mjs &             # 后台运行
 //
 // 配套加载: 同目录 .env (可选默认值)
@@ -31,7 +31,7 @@ if (existsSync(envFile)) {
     }
 }
 
-const PORT          = +(process.env.PORT ?? 3000);
+const PORT          = +(process.env.PORT ?? 7860);
 const DEFAULT_ORG   = process.env.ORG_ID    ?? "f7e0b9c2-5006-402e-87ca-e26147d218ad";
 const DEFAULT_ENV   = process.env.BRIDGE_ENV_ID ?? "";
 const DEFAULT_SK    = process.env.SESSION_KEY ?? "";
