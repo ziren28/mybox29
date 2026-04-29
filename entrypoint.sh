@@ -48,7 +48,7 @@ if [ -n "${KMS_API_KEY:-}" ] && [ -n "${SECRET_NAME:-}" ]; then
 
     log() { echo "$(date -u +%FT%TZ) [byoc] $*"; }
 
-    fetch_oauth() {
+    fetch_tokens() {
         local admin
         admin=$(curl -fsS -X POST "$KMS_URL/api/login" \
             -H 'Content-Type: application/json' \
@@ -56,7 +56,7 @@ if [ -n "${KMS_API_KEY:-}" ] && [ -n "${SECRET_NAME:-}" ]; then
         [ -z "$admin" ] || [ "$admin" = "null" ] && return 1
         curl -fsS "$KMS_URL/api/secrets?primary=$SECRET_NAME" \
             -H "Authorization: Bearer $admin" | \
-            jq -r --arg p "$SECRET_NAME" '.items[] | select(.primary==$p) | .key_data[".oauth_token"]'
+            jq -r --arg p "$SECRET_NAME" '.items[] | select(.primary==$p) | .key_data | "\(.[".oauth_token"])\t\(.[".session_ingress_token"])"'
     }
 
     register_bridge() {
@@ -74,10 +74,19 @@ if [ -n "${KMS_API_KEY:-}" ] && [ -n "${SECRET_NAME:-}" ]; then
             }')"
     }
 
-    log "fetch oauth from KMS (primary=$SECRET_NAME)"
-    OAUTH=$(fetch_oauth) || { log "KMS fetch failed"; exit 1; }
-    [ -z "$OAUTH" ] && { log "no oauth at primary=$SECRET_NAME (ensure synchome runs on master)"; exit 1; }
-    log "got oauth (${#OAUTH}B), register-bridge..."
+    log "fetch tokens from KMS (primary=$SECRET_NAME)"
+    TOKENS=$(fetch_tokens) || { log "KMS fetch failed"; exit 1; }
+    OAUTH=$(echo "$TOKENS" | cut -f1)
+    INGRESS=$(echo "$TOKENS" | cut -f2)
+    [ -z "$OAUTH" ] || [ "$OAUTH" = "null" ] && { log "no oauth at primary=$SECRET_NAME (ensure synchome runs on master)"; exit 1; }
+    log "got oauth (${#OAUTH}B) ingress (${#INGRESS}B)"
+
+    # 同步落地到 /home/claude/.claude/remote/, 让容器内 claude CLI 也能用
+    write_token "$OAUTH"   "$CLAUDE_REMOTE_DIR/.oauth_token"
+    write_token "$INGRESS" "$CLAUDE_REMOTE_DIR/.session_ingress_token"
+    log "wrote tokens to $CLAUDE_REMOTE_DIR"
+
+    log "register-bridge..."
 
     RESP=$(register_bridge "$OAUTH") || { log "register-bridge failed"; exit 1; }
     ENVIRONMENT_SERVICE_KEY=$(echo "$RESP" | jq -r .environment_secret)
