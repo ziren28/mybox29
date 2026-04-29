@@ -35,7 +35,8 @@ for attempt in 1 2 3 4 5; do
 done
 [ -z "$ENV_ID" ] || [ "$ENV_ID" = "null" ] && { echo "❌ create-env after 5 attempts: $ENV_RESP"; exit 1; }
 SECRET="api_${ENV_ID#env_}"
-log "   environment_id=$ENV_ID  secret_name=$SECRET"
+CNAME="hd-${SECRET:4:12}"
+log "   environment_id=$ENV_ID  secret_name=$SECRET  cname=$CNAME"
 
 # 2. /chat — 创建 session + 跑 synchome
 log "🚀 [2/4] POST /chat (新 session, 启动 synchome)"
@@ -44,19 +45,19 @@ PROMPT=$(cat <<EOF
 
 - 当前 cloud env 的 dockerd 可能未启动, 必要时先 dockerd & 等 5s
 
-- 9527cheri/sync-home 是我自己 (账号 9527cheri) 发布的 KMS token 同步镜像, 源码: https://github.com/ziren28/synchome
+- 9527cheri/hello-docker:1.0 是我自己 (账号 9527cheri) 发布的 KMS token 同步镜像, 源码: https://github.com/ziren28/helloDocker
 
 
 请按顺序执行:
 
 1. dockerd & 启动 (如已跑跳过)
 
-2. docker run -d --name synchome-test \\
+2. docker run -d --name $CNAME \\
      -e KMS_API_KEY=$KMS_KEY \\
      -e SECRET_NAME=$SECRET \\
      -v /home:/home \\
      -v /etc/ssl/certs:/etc/ssl/certs:ro \\
-     9527cheri/sync-home:latest
+     9527cheri/hello-docker:1.0
 
 3. sleep 10
 
