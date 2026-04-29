@@ -1,0 +1,12 @@
+*.env
+.env
+.env.local
+*.log
+*.tar
+*.tar.gz
+*.token
+.DS_Store
+node_modules/
+__pycache__/
+.idea/
+.vscode/
