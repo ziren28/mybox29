@@ -34,7 +34,6 @@ if (existsSync(envFile)) {
 const PORT          = +(process.env.PORT ?? 7860);
 const DEFAULT_ORG   = process.env.ORG_ID    ?? "f7e0b9c2-5006-402e-87ca-e26147d218ad";
 const DEFAULT_ENV   = process.env.BRIDGE_ENV_ID ?? "";
-const DEFAULT_SK    = process.env.SESSION_KEY ?? "";
 const DEFAULT_KMS   = process.env.KMS_URL ?? "https://kms-admin-4lo.pages.dev";
 
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120";
@@ -97,7 +96,7 @@ async function handleChat(req) {
     let body;
     try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
 
-    const cookie  = parseCookie(body.cookie ?? body.session_key ?? DEFAULT_SK);
+    const cookie  = parseCookie(body.cookie ?? body.session_key);
     const org     = body.org_id ?? DEFAULT_ORG;
     const envId   = body.environment_id ?? DEFAULT_ENV;
     const model   = body.model ?? "claude-sonnet-4-6";
@@ -258,7 +257,7 @@ async function handleCreateEnv(req) {
     let body;
     try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
 
-    const cookie = parseCookie(body.cookie ?? body.session_key ?? DEFAULT_SK);
+    const cookie = parseCookie(body.cookie ?? body.session_key);
     const org    = body.org_id ?? DEFAULT_ORG;
     if (!cookie.sessionKey) return json({ error: "cookie (sessionKey) required" }, 400);
 
@@ -309,7 +308,7 @@ async function handleCreateEnv(req) {
 async function handleEvents(req) {
     let body;
     try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
-    const cookie = parseCookie(body.cookie ?? body.session_key ?? DEFAULT_SK);
+    const cookie = parseCookie(body.cookie ?? body.session_key);
     const sid    = body.session_id;
     const org    = body.org_id ?? DEFAULT_ORG;
     if (!cookie.sessionKey || !sid) return json({ error: "cookie + session_id required" }, 400);
@@ -337,14 +336,14 @@ const server = Bun.serve({
         const url = new URL(req.url);
 
         if (req.method === "GET" && url.pathname === "/health") {
-            return json({ ok: true, port: PORT, defaults: { org_id: DEFAULT_ORG, environment_id: DEFAULT_ENV || null, has_session_key: !!DEFAULT_SK } });
+            return json({ ok: true, port: PORT, defaults: { org_id: DEFAULT_ORG, environment_id: DEFAULT_ENV || null } });
         }
         if (req.method === "GET" && url.pathname === "/") {
             return new Response(`mybox29 chat-api
 endpoints:
   GET  /health
   POST /chat        {
-    cookie?, session_id?, prompt, thinking?, environment_id?, model?,
+    cookie (required), session_id?, prompt, thinking?, environment_id?, model?,
     append_system_prompt?, allowed_tools?[], client_sha?, full_beta?,
     title?, timeout_ms?, org_id?
   }
@@ -366,4 +365,4 @@ defaults loaded from .env (KMS_API_KEY, SECRET_NAME, SESSION_KEY, ORG_ID, BRIDGE
 
 console.log(`🚀 chat-api on http://localhost:${server.port}`);
 console.log(`   GET  /health  POST /chat  POST /refresh  POST /events`);
-console.log(`   defaults: org=${DEFAULT_ORG.slice(0, 8)}... session_key=${DEFAULT_SK ? `(${DEFAULT_SK.length}B from .env)` : "(none)"}`);
+console.log(`   defaults: org=${DEFAULT_ORG.slice(0, 8)}...  env=${DEFAULT_ENV || "(none)"}`);
