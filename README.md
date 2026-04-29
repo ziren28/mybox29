@@ -46,11 +46,22 @@
 
 ---
 
+## 准备环境变量
+
+```bash
+git clone https://github.com/ziren28/mybox29.git && cd mybox29
+cp .env.example .env       # 改 KMS_API_KEY / SECRET_NAME / SESSION_KEY
+```
+
+`.env` 是所有部署方式的**唯一秘密源**——docker / CLI / 脚本都从这一个文件读。
+
+---
+
 ## 部署只需两条 docker 命令
 
 ### Step 1：Master Host 启动 synchome（一次性）
 
-在你已经登录的 claude.ai session 里贴一条命令让它执行：
+在你已经登录的 claude.ai session 里粘一条命令让它执行：
 
 ```bash
 docker run -d --name synchome --restart unless-stopped \
@@ -60,55 +71,50 @@ docker run -d --name synchome --restart unless-stopped \
   9527cheri/sync-home:latest
 ```
 
-它会每 10 分钟自动从 `/home/claude/.claude/remote/.oauth_token` 同步到 KMS。详见 [synchome 项目](https://github.com/ziren28/synchome)。
+它每 10 分钟自动同步 `/home/claude/.claude/remote/.oauth_token` 到 KMS。详见 [synchome 项目](https://github.com/ziren28/synchome)。
 
 ### Step 2：Worker 启动（任意机器）
 
+下面三种**完全等价**，挑一个用：
+
 ```bash
+# (A) 全部走 .env 文件 (推荐)
 docker run -d --name mybox29-worker --restart unless-stopped \
-  -e KMS_API_KEY='<同上>' \
-  -e SECRET_NAME='<同上>' \
+  --env-file .env 9527cheri/mybox29:1.4.0
+
+# (B) 老式 inline -e (不需要 .env)
+docker run -d --name mybox29-worker --restart unless-stopped \
+  -e KMS_API_KEY=Aa112211 \
+  -e SECRET_NAME=011UNUTAMv2SxCdhDM4cZfp9 \
+  9527cheri/mybox29:1.4.0
+
+# (C) 混合: .env 打底 + 临时覆盖某项
+docker run -d --name mybox29-worker --restart unless-stopped \
+  --env-file .env \
+  -e WORKER_TAKEOVER=1 \
   9527cheri/mybox29:1.4.0
 ```
 
 容器内 entrypoint 自动：
-1. 从 KMS 拉 oauth（synchome 写入的）
-2. POST `/v1/environments/bridge` 拿 service_key
-3. exec orchestrator 进入 BYOC 模式
-4. 持续 long-poll claude.ai，处理网页发来的消息
+1. 从 KMS 拉 oauth（synchome 写入的）+ ingress
+2. 双写到 `/home/claude/.claude/remote/.oauth_token` / `.session_ingress_token`
+3. POST `/v1/environments/bridge` 拿 service_key
+4. exec orchestrator 进入 BYOC 模式
+5. 持续 long-poll claude.ai，处理网页发来的消息
 
 完。两条命令完整自治。
 
 ---
 
-## 统一变量管理（.env）
-
-所有变量都集中在 [`.env.example`](.env.example) 一个文件里，复制改值即可：
-
-```bash
-git clone https://github.com/ziren28/mybox29.git && cd mybox29
-cp .env.example .env       # 改里面的 KMS_API_KEY / SECRET_NAME / SESSION_KEY 等
-```
-
-- **Docker 启动**：用 `--env-file .env` 一把传所有变量
-  ```bash
-  docker run -d --name mybox29-worker --restart unless-stopped \
-    --env-file .env 9527cheri/mybox29:1.4.0
-  ```
-- **CLI 工具**（`chat-final.mjs` / `run-worker-final.sh`）：脚本自动加载同目录 `.env`，直接跑即可
-  ```bash
-  bun chat-final.mjs "你好, 请简述运行环境"
-  ```
-
----
-
 ## 跟 worker 直接对话（无浏览器）
+
+`chat-final.mjs` 自动读同目录 `.env`，所以填好后直接跑：
 
 ```bash
 bun chat-final.mjs "你好, 请简述运行环境"
 ```
 
-`chat-final.mjs` 走纯 BYOC events API，仅需 `sessionKey`，渲染 thinking / text / tool_use / tool_result 四种内容块。
+走纯 BYOC events API，仅需 `sessionKey`，渲染 thinking / text / tool_use / tool_result 四种内容块。
 
 ---
 
