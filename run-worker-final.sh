@@ -14,12 +14,17 @@
 #   - 因此本脚本完全不依赖浏览器/playwright/keeper
 
 set -euo pipefail
-: "${KMS_API_KEY:?需 KMS_API_KEY}"
+
+# 自动加载同目录 .env (如果存在)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$SCRIPT_DIR/.env" ] && set -a && . "$SCRIPT_DIR/.env" && set +a
+
+: "${KMS_API_KEY:?需 KMS_API_KEY (在 .env 设置)}"
 : "${SECRET_NAME:?需 SECRET_NAME (synchome 写入 KMS 的 primary)}"
 
 KMS_URL="${KMS_URL:-https://kms-admin-4lo.pages.dev}"
 WORKER_NAME="${WORKER_NAME:-mybox29-runner}"
-TAG="${TAG:-1.3.1}"
+TAG="${TAG:-1.4.0}"
 BRIDGE_ENV_ID="${BRIDGE_ENV_ID:-env_0148CCLDzQdWNE2cPRThecmr}"
 ORG_ID="${ORG_ID:-f7e0b9c2-5006-402e-87ca-e26147d218ad}"
 UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120"

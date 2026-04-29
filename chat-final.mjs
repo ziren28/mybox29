@@ -4,15 +4,24 @@
 // 实测 (2026-04-29): claude.ai BYOC events API 仅需 sessionKey 一个 cookie,
 // 不需要 cf_clearance / __cf_bm. 因此本脚本零浏览器依赖.
 //
-// 用法:
-//   SESSION_KEY=sk-ant-sid02-... \
-//   SESSION_ID=session_xxx \
+// 用法 (推荐): 把变量写进 .env 后直接跑
 //   bun chat-final.mjs "你好, 请简述运行环境"
 //
-// 选填:
-//   ORG_ID            organization UUID (默认 f7e0b9c2-...)
-//   THINKING=1        启用 thinking 模式 (默认开启)
-//   TIMEOUT_MS=120000 轮询超时 (默认 120s)
+// 或临时 inline:
+//   SESSION_KEY=... SESSION_ID=... bun chat-final.mjs "..."
+
+// 自动加载同目录 .env
+import { readFileSync, existsSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
+const __dir = dirname(fileURLToPath(import.meta.url));
+const envFile = join(__dir, ".env");
+if (existsSync(envFile)) {
+    for (const line of readFileSync(envFile, "utf8").split("\n")) {
+        const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/);
+        if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    }
+}
 
 const SK      = process.env.SESSION_KEY ?? "";
 const SID     = process.env.SESSION_ID  ?? "";

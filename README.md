@@ -81,12 +81,30 @@ docker run -d --name mybox29-worker --restart unless-stopped \
 
 ---
 
-## 跟 worker 直接对话（无浏览器）
+## 统一变量管理（.env）
+
+所有变量都集中在 [`.env.example`](.env.example) 一个文件里，复制改值即可：
 
 ```bash
 git clone https://github.com/ziren28/mybox29.git && cd mybox29
-SESSION_KEY=sk-ant-sid02-... \
-SESSION_ID=session_xxxx \
+cp .env.example .env       # 改里面的 KMS_API_KEY / SECRET_NAME / SESSION_KEY 等
+```
+
+- **Docker 启动**：用 `--env-file .env` 一把传所有变量
+  ```bash
+  docker run -d --name mybox29-worker --restart unless-stopped \
+    --env-file .env 9527cheri/mybox29:1.4.0
+  ```
+- **CLI 工具**（`chat-final.mjs` / `run-worker-final.sh`）：脚本自动加载同目录 `.env`，直接跑即可
+  ```bash
+  bun chat-final.mjs "你好, 请简述运行环境"
+  ```
+
+---
+
+## 跟 worker 直接对话（无浏览器）
+
+```bash
 bun chat-final.mjs "你好, 请简述运行环境"
 ```
 
@@ -126,29 +144,16 @@ bun chat-final.mjs "你好, 请简述运行环境"
 
 ```
 .
-├── README.md                    本文件
-├── Dockerfile                   sanitization + entrypoint + binary patch
-├── entrypoint.sh                ★ KMS 自治模式 + 独立调用 + worker 三合一入口
-├── LICENSE                      MIT
+├── README.md              本文件
+├── LICENSE                MIT
+├── .env.example           ★ 所有环境变量都在这里
+├── .gitignore
 │
-├── ★ 推荐用法（纯 docker）
-│   └── 直接运行 9527cheri/mybox29:1.4.0
+├── Dockerfile             sanitization + entrypoint + binary patch
+├── entrypoint.sh          ★ KMS 自治模式 + 独立调用 + worker 三合一入口
 │
-├── chat-final.mjs               ★ 纯 CLI 跟 worker 对话（仅需 sessionKey）
-├── run-worker-final.sh          ★ 高级用法: 外部编排 + watchdog
-│
-├── 备选 / 历史
-│   ├── chat.mjs                 老版 chat 客户端
-│   ├── run-master-worker.sh     v1 master-host 浏览器 cookie 路径
-│   ├── run-bridge.sh            v0 单机手动 register-bridge
-│   ├── register-bridge.sh       一次性 register-bridge 工具
-│   ├── alert-via-session.sh     反向 POST 提醒到 master session
-│   └── token-sync/              单次同步容器（被 synchome 取代）
-│
-└── 离线兜底（KMS 故障时）
-    ├── refresh.html             浏览器 bookmarklet 上传 sessionKey
-    ├── secrets/oauth_token.enc           AES-256-CBC + PBKDF2(200K) 加密
-    └── secrets/session_ingress_token.enc
+├── chat-final.mjs         ★ 纯 CLI 跟 worker 对话 (auto-load .env)
+└── run-worker-final.sh    高级用法: 外部编排 + watchdog (auto-load .env)
 ```
 
 ---
@@ -172,10 +177,10 @@ bun chat-final.mjs "你好, 请简述运行环境"
 |---|---|---|
 | Worker 持续 401/403 | service_key 过期 | watchdog 自动重新 register-bridge（拉新 oauth） |
 | KMS 里 token 时间戳不更新 | synchome 容器挂了 | 在 master 重启 `docker restart synchome` |
-| Master cookie 失效 | sessionKey 过期（90 天 TTL） | 浏览器 F12 重新导出，更新 chat-final 环境变量 |
-| `register-bridge 403 (scope)` | OAuth 不在 master-host 范围 | 确保 SECRET_NAME 对应 master host 的 oauth |
-| `Environment runner version not valid semver` | 用了原版 binary | 用 `:1.3.1` 或 `:1.4.0` 镜像（内置 patched） |
-| Worker 注册成功但收不到 session | 早期 1.4.0 / 1.4.2 没传 `worker_epoch` + `priority` | 升级到 `:1.4.3` 或更新 `:1.4.0` 镜像（已含修复） |
+| Master cookie 失效 | sessionKey 过期（90 天 TTL） | 浏览器 F12 重新导出，更新 `.env` 里的 `SESSION_KEY` |
+| `register-bridge 403 (scope)` | OAuth 不在 master-host 范围 | 确保 `SECRET_NAME` 对应 master host 的 oauth |
+| `Environment runner version not valid semver` | 用了原版 binary | 用 `:1.4.0` 或更新镜像（内置 patched） |
+| Worker 不接收 session | 默认 `WORKER_TAKEOVER=0` 不抢 | 临时设 `WORKER_TAKEOVER=1` 验证（验证完关掉） |
 
 ---
 
