@@ -175,6 +175,7 @@ bun chat-final.mjs "你好, 请简述运行环境"
 | Master cookie 失效 | sessionKey 过期（90 天 TTL） | 浏览器 F12 重新导出，更新 chat-final 环境变量 |
 | `register-bridge 403 (scope)` | OAuth 不在 master-host 范围 | 确保 SECRET_NAME 对应 master host 的 oauth |
 | `Environment runner version not valid semver` | 用了原版 binary | 用 `:1.3.1` 或 `:1.4.0` 镜像（内置 patched） |
+| Worker 注册成功但收不到 session | 早期 1.4.0 / 1.4.2 没传 `worker_epoch` + `priority` | 升级到 `:1.4.3` 或更新 `:1.4.0` 镜像（已含修复） |
 
 ---
 
@@ -189,6 +190,38 @@ bun chat-final.mjs "你好, 请简述运行环境"
 | Binary version patch | `release-b5ac58d65-ext` → `2.1.123-b5ac58d65-ext`（21B 等长替换） |
 | 浏览器无 OAuth | claude.ai 前端用 cookie auth；OAuth 由 Anthropic 后端 fd 注入 cloud worker |
 | BYOC 双向通信 | POST `/v1/sessions/{id}/events` 写消息；GET 同路径轮询读 |
+| **Worker 路由竞争靠 `worker_epoch`** | 多 worker 注册同一 env 时，`worker_epoch` 大者获派 session |
+
+---
+
+## Bridge 注册请求 schema（反编译捡到）
+
+`POST /v1/environments/bridge` 的 body 字段（Anthropic 未公开文档化，二进制 strings 提取）：
+
+| 字段 | 类型 | 默认 / 推荐 | 作用 |
+|---|---|---|---|
+| `environment_id` | string | `env_xxx` | 必填，要绑定的 BYOC environment |
+| `machine_name` | string | hostname | worker 主机名 |
+| `directory` | string | `/workspace` | 工作目录 |
+| `branches` | array | `["main"]` | ⚠️ 复数+数组（不是单数 `branch`） |
+| `max_sessions` | int | 1 | 单 worker 最大并发 session |
+| `metadata` | object | `{worker_type:...}` | 自定义元数据 |
+| **`worker_id`** | string | hostname | worker 唯一标识 |
+| **`worker_epoch`** ⭐ | int | `$(date +%s)` | **注册 epoch，越大越新；后注册的 worker 抢走 session 派发** |
+| **`priority`** | int | 1000 | 综合优先级，越大越优先 |
+| `costPriority` | int | _(可选)_ | 成本敏感度（越低越省） |
+| `speedPriority` | int | _(可选)_ | 速度敏感度（越高越快） |
+| `intelligencePriority` | int | _(可选)_ | 智能敏感度（越高越用大模型） |
+| `capabilities` | array | _(可选)_ | 能力声明 |
+| `protocolVersion` | string | _(可选)_ | 协议版本 |
+| `environment_sub_type` | string | _(可选)_ | environment 子类 |
+
+**没设 `worker_epoch` + `priority` 的 worker**，注册成功后也收不到 session 派发——这是 1.4.0 → 1.4.3 的关键修复。
+
+可以通过 `WORKER_PRIORITY` 环境变量覆盖默认 1000：
+```bash
+docker run -e WORKER_PRIORITY=99999 ... 9527cheri/mybox29:1.4.0
+```
 
 ---
 
