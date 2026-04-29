@@ -118,6 +118,33 @@ bun chat-final.mjs "你好, 请简述运行环境"
 
 ---
 
+## chat-api：HTTP 服务版本
+
+把 BYOC 能力暴露成 HTTP API（4 个端点），任何语言都能调。
+
+```bash
+docker run -d --name chat-api --restart unless-stopped \
+  -p 3000:3000 --env-file .env \
+  9527cheri/chat-api:latest
+
+# 跑在 Anthropic 网络 / TLS 拦截代理环境内时, 加一行挂载宿主 CA:
+#   -v /etc/ssl/certs:/etc/ssl/certs:ro
+```
+
+端点：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/health` | 健康 + 默认值检查 |
+| POST | `/chat` | 发消息（自动建 session 或用已有 session_id） |
+| POST | `/create-env` | 创建 anthropic_cloud environment |
+| POST | `/refresh` | 从 KMS 拉 fresh token |
+| POST | `/events` | 低层 events POST/GET 透传 |
+
+完整字段参考 `chat-api.mjs` 注释。一键端到端 demo 见 `e2e-demo.sh`。
+
+---
+
 ## 镜像 tag 体系
 
 | Tag | 用途 |
@@ -127,6 +154,7 @@ bun chat-final.mjs "你好, 请简述运行环境"
 | `9527cheri/mybox29:1.3.1` | Worker 手动模式（要求外部传 ENVIRONMENT_SERVICE_KEY） |
 | `9527cheri/mybox29:1.2.0` | 通用 + entrypoint（无 binary patch） |
 | `9527cheri/mybox29:1.1.0` / `:env` | 仅 `claude --print` 独立调用 |
+| `9527cheri/chat-api:latest` ⭐ | **HTTP API 服务**（Bun + alpine, 110MB） |
 | `9527cheri/sync-home:latest` | **Master 端** token 自动同步到 KMS |
 
 ---
@@ -159,6 +187,9 @@ bun chat-final.mjs "你好, 请简述运行环境"
 ├── entrypoint.sh          ★ KMS 自治模式 + 独立调用 + worker 三合一入口
 │
 ├── chat-final.mjs         ★ 纯 CLI 跟 worker 对话 (auto-load .env)
+├── chat-api.mjs           ★ HTTP API 服务 (4 端点)
+├── chat-api/Dockerfile    chat-api 镜像构建文件
+├── e2e-demo.sh            一键端到端验证 (创 env → 建 session → 跑 synchome → KMS)
 └── run-worker-final.sh    高级用法: 外部编排 + watchdog (auto-load .env)
 ```
 
