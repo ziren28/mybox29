@@ -48,17 +48,43 @@ const MAGIC_BETA = [
     "effort-2025-11-24",
 ].join(",");
 
-const headersFor = (sk, org, opts = {}) => ({
-    "anthropic-version":         "2023-06-01",
-    "anthropic-beta":            opts.full_beta ? MAGIC_BETA : "ccr-byoc-2025-07-29",
-    "anthropic-client-feature":  "ccr",
-    "anthropic-client-platform": "web_claude_ai",
-    "x-organization-uuid":       org,
-    "user-agent":                UA,
-    "Cookie":                    `sessionKey=${sk}`,
-    ...(opts.client_sha && { "anthropic-client-sha": opts.client_sha }),
-    ...(opts.direct_browser && { "anthropic-dangerous-direct-browser-access": "true" }),
-});
+// 解析 cookie 输入: 既支持 "sk-ant-sid02-..." 单值, 也支持完整 "k1=v1; k2=v2; ..." 串
+function parseCookie(input) {
+    if (!input) return { sessionKey: null, deviceId: null, raw: "" };
+    const trimmed = String(input).trim();
+    if (!trimmed.includes("=")) {
+        return { sessionKey: trimmed, deviceId: null, raw: `sessionKey=${trimmed}` };
+    }
+    const kv = {};
+    for (const part of trimmed.split(";")) {
+        const m = part.trim().match(/^([^=]+)=(.*)$/);
+        if (m) kv[m[1].trim()] = m[2].trim();
+    }
+    return {
+        sessionKey: kv.sessionKey ?? null,
+        deviceId:   kv["anthropic-device-id"] ?? null,
+        raw:        trimmed,
+    };
+}
+
+const headersFor = (parsedCookie, org, opts = {}) => {
+    // 如果用户传完整 cookie 串就原样用, 否则用 sessionKey 拼最小 cookie
+    const cookieStr = parsedCookie.raw.includes(";")
+        ? parsedCookie.raw
+        : `sessionKey=${parsedCookie.sessionKey}; lastActiveOrg=${org}`;
+    const clientSha = opts.client_sha ?? parsedCookie.deviceId ?? null;
+    return {
+        "anthropic-version":         "2023-06-01",
+        "anthropic-beta":            opts.full_beta ? MAGIC_BETA : "ccr-byoc-2025-07-29",
+        "anthropic-client-feature":  "ccr",
+        "anthropic-client-platform": "web_claude_ai",
+        "x-organization-uuid":       org,
+        "user-agent":                UA,
+        "Cookie":                    cookieStr,
+        ...(clientSha && { "anthropic-client-sha": clientSha }),
+        ...(opts.direct_browser && { "anthropic-dangerous-direct-browser-access": "true" }),
+    };
+};
 
 const json = (obj, status = 200) =>
     new Response(JSON.stringify(obj, null, 2), {
@@ -71,25 +97,25 @@ async function handleChat(req) {
     let body;
     try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
 
-    const sk     = body.cookie ?? body.session_key ?? DEFAULT_SK;
-    const org    = body.org_id ?? DEFAULT_ORG;
-    const envId  = body.environment_id ?? DEFAULT_ENV;
-    const model  = body.model ?? "claude-sonnet-4-6";
-    const think  = body.thinking !== false;
-    const prompt = body.prompt ?? body.text ?? "";
+    const cookie  = parseCookie(body.cookie ?? body.session_key ?? DEFAULT_SK);
+    const org     = body.org_id ?? DEFAULT_ORG;
+    const envId   = body.environment_id ?? DEFAULT_ENV;
+    const model   = body.model ?? "claude-sonnet-4-6";
+    const think   = body.thinking !== false;
+    const prompt  = body.prompt ?? body.text ?? "";
     const TIMEOUT = +(body.timeout_ms ?? 120000);
-    let sid      = body.session_id ?? null;
+    let sid       = body.session_id ?? null;
 
     // 高级 session_context 选项 (创建新会话时生效, 已有 session 忽略)
     const appendSystemPrompt = body.append_system_prompt ?? null;
-    const allowedTools       = body.allowed_tools ?? null;  // 例: ["Bash","Read","Write","WebFetch","WebSearch"]
-    const clientSha          = body.client_sha ?? null;
-    const fullBeta           = body.full_beta !== false;    // 默认开
+    const allowedTools       = body.allowed_tools ?? null;
+    const clientSha          = body.client_sha ?? null;          // 不传则自动用 cookie 里的 anthropic-device-id
+    const fullBeta           = body.full_beta !== false;
 
-    if (!sk)     return json({ error: "cookie (sessionKey) required" }, 400);
-    if (!prompt) return json({ error: "prompt required" }, 400);
+    if (!cookie.sessionKey) return json({ error: "cookie (sessionKey) required" }, 400);
+    if (!prompt)            return json({ error: "prompt required" }, 400);
 
-    const HEADERS = headersFor(sk, org, { full_beta: fullBeta, client_sha: clientSha, direct_browser: true });
+    const HEADERS = headersFor(cookie, org, { full_beta: fullBeta, client_sha: clientSha, direct_browser: true });
 
     // 1. 没传 session_id → 创建新会话 (含 append_system_prompt + allowed_tools)
     if (!sid) {
@@ -227,11 +253,11 @@ async function handleCreateEnv(req) {
     let body;
     try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
 
-    const sk  = body.cookie ?? body.session_key ?? DEFAULT_SK;
-    const org = body.org_id ?? DEFAULT_ORG;
-    if (!sk) return json({ error: "cookie (sessionKey) required" }, 400);
+    const cookie = parseCookie(body.cookie ?? body.session_key ?? DEFAULT_SK);
+    const org    = body.org_id ?? DEFAULT_ORG;
+    if (!cookie.sessionKey) return json({ error: "cookie (sessionKey) required" }, 400);
 
-    const HEADERS = headersFor(sk, org);
+    const HEADERS = headersFor(cookie, org, { full_beta: true, direct_browser: true });
     const url = `https://claude.ai/v1/environment_providers/private/organizations/${org}/cloud/create`;
 
     const reqBody = {
@@ -278,12 +304,12 @@ async function handleCreateEnv(req) {
 async function handleEvents(req) {
     let body;
     try { body = await req.json(); } catch { return json({ error: "invalid JSON" }, 400); }
-    const sk = body.cookie ?? body.session_key ?? DEFAULT_SK;
-    const sid = body.session_id;
-    const org = body.org_id ?? DEFAULT_ORG;
-    if (!sk || !sid) return json({ error: "cookie + session_id required" }, 400);
+    const cookie = parseCookie(body.cookie ?? body.session_key ?? DEFAULT_SK);
+    const sid    = body.session_id;
+    const org    = body.org_id ?? DEFAULT_ORG;
+    if (!cookie.sessionKey || !sid) return json({ error: "cookie + session_id required" }, 400);
 
-    const HEADERS = headersFor(sk, org);
+    const HEADERS = headersFor(cookie, org);
 
     if (body.action === "post") {
         const events = body.events ?? [];
