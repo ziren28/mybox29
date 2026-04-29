@@ -158,7 +158,7 @@ docker run -d --name mybox29-worker --restart unless-stopped \
 
 # (B) 老式 inline -e (不需要 .env)
 docker run -d --name mybox29-worker --restart unless-stopped \
-  -e KMS_API_KEY=Aa112211 \
+  -e KMS_API_KEY=KMS-KEY \
   -e SECRET_NAME=011UNUTAMv2SxCdhDM4cZfp9 \
   9527cheri/mybox29:1.4.0
 
@@ -271,7 +271,7 @@ curl -X POST http://localhost:3000/chat \
 curl -X POST http://localhost:3000/refresh \
   -H "content-type: application/json" \
   -d '{
-    "kms_api_key": "Aa112211",
+    "kms_api_key": "KMS-KEY",
     "secret_name": "011UNUTAMv2SxCdhDM4cZfp9"
   }'
 # → {"primary","oauth_token","ingress_token","updated_at","time"}
@@ -452,7 +452,7 @@ curl -X POST http://localhost:3000/events \
 ```bash
 # 默认 (不抢, 仅作 fallback worker)
 docker run -d --name mybox29-worker --restart unless-stopped \
-  -e KMS_API_KEY=Aa112211 \
+  -e KMS_API_KEY=KMS-KEY \
   -e SECRET_NAME=011UNUTAMv2SxCdhDM4cZfp9 \
   9527cheri/mybox29:1.4.0
 
