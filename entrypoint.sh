@@ -24,7 +24,11 @@ CLAUDE_REMOTE_DIR=/home/claude/.claude/remote
 mkdir -p "$CLAUDE_REMOTE_DIR" && chmod 700 "$CLAUDE_REMOTE_DIR"
 
 write_token() {
-    [ -n "$1" ] && { printf '%s' "$1" > "$2"; chmod 600 "$2"; }
+    if [ -n "$1" ]; then
+        printf '%s' "$1" > "$2"
+        chmod 600 "$2"
+    fi
+    return 0
 }
 write_token "$CLAUDE_OAUTH_TOKEN"            "$CLAUDE_REMOTE_DIR/.oauth_token"
 write_token "$CLAUDE_SESSION_INGRESS_TOKEN"  "$CLAUDE_REMOTE_DIR/.session_ingress_token"
