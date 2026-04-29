@@ -147,11 +147,15 @@ async function handleChat(req) {
         sid = (await cr.json()).id;
     }
 
-    // 2. POST user event
+    // 2. POST user event (支持 prompt 里 {{session_id}} / {{secret_name}} 占位符)
+    const secretName = sid.replace(/^session_/, "");
+    const finalPrompt = prompt
+        .replaceAll("{{session_id}}",  sid)
+        .replaceAll("{{secret_name}}", secretName);
     const sinceTs = Date.now();
     const userMsg = {
         role: "user",
-        content: [{ type: "text", text: prompt }],
+        content: [{ type: "text", text: finalPrompt }],
         ...(think && { thinking: { type: "enabled", budget_tokens: 8192 } }),
     };
     const post = await fetch(`https://claude.ai/v1/sessions/${sid}/events`, {
@@ -203,6 +207,7 @@ async function handleChat(req) {
 
     return json({
         session_id:  sid,
+        secret_name: secretName,                            // = sid 去掉 "session_" 前缀, 跟 master-host 同 schema
         reply:       textBuf,
         thinking:    thinkBuf.trim() || null,
         tool_uses:   toolUses,
