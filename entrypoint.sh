@@ -60,16 +60,23 @@ if [ -n "${KMS_API_KEY:-}" ] && [ -n "${SECRET_NAME:-}" ]; then
     }
 
     register_bridge() {
+        local epoch
+        epoch=$(date +%s)
         curl -fsS -X POST "https://api.anthropic.com/v1/environments/bridge" \
             -H "Authorization: Bearer $1" \
             -H "Content-Type: application/json" \
             -H "anthropic-version: 2023-06-01" \
             -H "anthropic-beta: ccr-byoc-2025-07-29,environments-2025-11-01" \
             -H "x-environment-runner-version: 2.1.123" \
-            -d "$(jq -n --arg env "$BRIDGE_ENV_ID" '{
+            -d "$(jq -n --arg env "$BRIDGE_ENV_ID" --argjson ep "$epoch" --arg pri "${WORKER_PRIORITY:-1000}" '{
                 machine_name: ($ENV.HOSTNAME // "mybox29"),
-                directory: "/workspace", branch: "main",
-                max_sessions: 1, environment_id: $env,
+                directory: "/workspace",
+                branches: ["main"],
+                max_sessions: 1,
+                environment_id: $env,
+                worker_id: ($ENV.HOSTNAME // "mybox29"),
+                worker_epoch: $ep,
+                priority: ($pri | tonumber),
                 metadata: {worker_type: "docker_container"}
             }')"
     }
