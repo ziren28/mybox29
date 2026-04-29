@@ -35,6 +35,7 @@ const PORT          = +(process.env.PORT ?? 7860);
 const DEFAULT_ORG   = process.env.ORG_ID    ?? "f7e0b9c2-5006-402e-87ca-e26147d218ad";
 const DEFAULT_ENV   = process.env.BRIDGE_ENV_ID ?? "";
 const DEFAULT_KMS   = process.env.KMS_URL ?? "https://kms-admin-4lo.pages.dev";
+const ADMIN_PASS    = process.env.ADMIN_PASSWORD ?? "Aa112211";
 
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120";
 
@@ -329,6 +330,169 @@ async function handleEvents(req) {
     return json({ status: r.status, body: await r.json().catch(() => null) });
 }
 
+// ─────────────────────────── dashboard auth ───────────────────────────
+const DASH_TOKEN = Buffer.from(ADMIN_PASS).toString("base64");
+
+function isDashAuthed(req) {
+    const h = req.headers.get("cookie") ?? "";
+    return h.split(";").map(s => s.trim()).includes(`dash_auth=${DASH_TOKEN}`);
+}
+
+const LOGIN_HTML = `<!DOCTYPE html>
+<html lang="zh"><head><meta charset="UTF-8"><title>chat-api</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;align-items:center;justify-content:center}.card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:32px;width:320px}h1{font-size:18px;font-weight:600;margin-bottom:4px}p{font-size:13px;color:#94a3b8;margin-bottom:24px}label{display:block;font-size:12px;color:#94a3b8;margin-bottom:6px}input{width:100%;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:10px 12px;border-radius:8px;font-size:14px;outline:none}input:focus{border-color:#3b82f6}button{width:100%;margin-top:16px;padding:10px;background:#3b82f6;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:500}button:hover{background:#2563eb}.err{color:#ef4444;font-size:12px;margin-top:10px}</style>
+</head><body><div class="card">
+<h1>chat-api</h1><p>管理员登录</p>
+<form method="POST" action="/login">
+  <label>密码</label>
+  <input type="password" name="password" autofocus placeholder="••••••••">
+  ERRORMSG
+  <button type="submit">登录</button>
+</form></div></body></html>`;
+
+const DASH_HTML = `<!DOCTYPE html>
+<html lang="zh"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>chat-api dashboard</title>
+<style>
+:root{--bg:#0f172a;--sf:#1e293b;--bd:#334155;--tx:#e2e8f0;--mu:#94a3b8;--ac:#3b82f6;--ah:#2563eb;--ok:#22c55e;--er:#ef4444;--r:8px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',monospace;background:var(--bg);color:var(--tx);min-height:100vh}
+header{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:var(--sf);border-bottom:1px solid var(--bd)}
+header h1{font-size:14px;font-weight:600;color:var(--mu)}
+.tabs{display:flex;padding:10px 20px 0;background:var(--sf);border-bottom:1px solid var(--bd);gap:2px}
+.tab{padding:7px 16px;cursor:pointer;font-size:13px;border-radius:var(--r) var(--r) 0 0;color:var(--mu);border:1px solid transparent;border-bottom:none}
+.tab.on{background:var(--bg);color:var(--tx);border-color:var(--bd)}
+.wrap{max-width:860px;margin:0 auto;padding:20px}
+.panel{display:none}.panel.on{display:block}
+.ck{background:var(--sf);border:1px solid var(--bd);border-radius:var(--r);padding:12px;margin-bottom:16px}
+label{display:block;font-size:12px;color:var(--mu);margin:10px 0 4px}label:first-child{margin-top:0}
+input,textarea,select{width:100%;background:var(--sf);border:1px solid var(--bd);color:var(--tx);padding:7px 10px;border-radius:var(--r);font-size:13px;font-family:monospace;outline:none}
+input:focus,textarea:focus,select:focus{border-color:var(--ac)}
+textarea{resize:vertical;min-height:80px}#prompt{min-height:140px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+btn,button{margin-top:14px;padding:7px 18px;background:var(--ac);color:#fff;border:none;border-radius:var(--r);cursor:pointer;font-size:13px;font-weight:500}
+button:hover{background:var(--ah)}button:disabled{opacity:.5;cursor:not-allowed}
+.resp{margin-top:16px}.resp h4{font-size:12px;color:var(--mu);margin-bottom:6px;display:flex;align-items:center;gap:6px}
+pre{background:var(--sf);border:1px solid var(--bd);border-radius:var(--r);padding:12px;font-size:12px;overflow:auto;max-height:380px;white-space:pre-wrap;word-break:break-all}
+.badge{padding:2px 7px;border-radius:4px;font-size:11px}.ok{background:#14532d;color:var(--ok)}.er{background:#450a0a;color:var(--er)}
+.hg{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:8px}
+.hc{background:var(--sf);border:1px solid var(--bd);border-radius:var(--r);padding:12px}
+.hc .v{font-size:20px;font-weight:600;margin-top:4px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--bd);border-top-color:var(--ac);border-radius:50%;animation:sp .6s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style></head><body>
+<header><h1>mybox29 / chat-api</h1><a href="/logout" style="font-size:12px;color:var(--mu);text-decoration:none">logout</a></header>
+<div class="tabs">
+  <div class="tab on" onclick="go('health',0)">Health</div>
+  <div class="tab" onclick="go('chat',1)">Chat</div>
+  <div class="tab" onclick="go('env',2)">Create Env</div>
+  <div class="tab" onclick="go('ref',3)">KMS Refresh</div>
+</div>
+<div class="wrap">
+  <div class="ck"><label>Cookie (共享, 存 localStorage)</label>
+    <textarea id="ck" rows="2" placeholder="sessionKey=sk-ant-sid02-... 或完整浏览器 cookie 串"></textarea></div>
+
+  <div id="p-health" class="panel on"><div id="hc"><div class="spin"></div></div></div>
+
+  <div id="p-chat" class="panel">
+    <div class="row">
+      <div><label>Environment ID (选填)</label><input id="c-env" placeholder="env_01..."></div>
+      <div><label>Session ID (选填, 空=新建)</label><input id="c-sid" placeholder="session_01..."></div>
+    </div>
+    <div class="row3" style="margin-top:10px">
+      <div><label>Model</label><select id="c-mod">
+        <option value="claude-sonnet-4-6">sonnet-4-6</option>
+        <option value="claude-opus-4-7">opus-4-7</option>
+        <option value="claude-haiku-4-5-20251001">haiku-4-5</option>
+      </select></div>
+      <div><label>Title</label><input id="c-ttl" placeholder="untitle"></div>
+      <div><label>Timeout ms</label><input id="c-tmo" type="number" value="120000"></div>
+    </div>
+    <div style="margin-top:10px"><label style="margin:0;display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input id="c-thk" type="checkbox" checked> Thinking</label></div>
+    <label>Prompt *</label><textarea id="prompt" placeholder="输入消息..."></textarea>
+    <button id="c-btn" onclick="doChat()">发送</button>
+    <div id="c-resp" class="resp" style="display:none"></div>
+  </div>
+
+  <div id="p-env" class="panel">
+    <label>Name (选填)</label><input id="e-name" placeholder="my-env">
+    <button id="e-btn" onclick="doEnv()">创建 Environment</button>
+    <div id="e-resp" class="resp" style="display:none"></div>
+  </div>
+
+  <div id="p-ref" class="panel">
+    <div class="row">
+      <div><label>KMS API Key *</label><input id="r-key" placeholder="Aa112211"></div>
+      <div><label>Secret Name *</label><input id="r-nm" placeholder="api_01..."></div>
+    </div>
+    <label>KMS URL</label><input id="r-url" value="https://kms-admin-4lo.pages.dev">
+    <button id="r-btn" onclick="doRef()">查询</button>
+    <div id="r-resp" class="resp" style="display:none"></div>
+  </div>
+</div>
+<script>
+const ck=document.getElementById('ck');
+ck.value=localStorage.getItem('_ck')||'';
+ck.oninput=function(){localStorage.setItem('_ck',ck.value.trim())};
+function go(name,idx){
+  document.querySelectorAll('.tab').forEach(function(t,i){t.classList.toggle('on',i===idx)});
+  document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('on')});
+  document.getElementById('p-'+name).classList.add('on');
+  if(name==='health')loadH();
+}
+function showR(id,data,ms){
+  var el=document.getElementById(id);el.style.display='block';
+  var ok=!data.error;
+  el.innerHTML='<h4><span class="badge '+(ok?'ok':'er')+'">'+(ok?'✓':'✗')+'</span>'+(ms?ms+'ms':'')+'</h4><pre>'+JSON.stringify(data,null,2)+'</pre>';
+  if(data.environment_id)document.getElementById('c-env').value=data.environment_id;
+  if(data.session_id)document.getElementById('c-sid').value=data.session_id;
+}
+function busy(id,v){var b=document.getElementById(id);b.disabled=v;if(v){b._t=b.textContent;b.textContent='请求中...'}else b.textContent=b._t||b.textContent}
+async function call(path,body,bid,rid){
+  busy(bid,true);var t=Date.now();
+  try{var r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  var d=await r.json();if(rid)showR(rid,d,Date.now()-t);return d}
+  catch(e){if(rid)showR(rid,{error:e.message},Date.now()-t)}
+  finally{busy(bid,false)}
+}
+function doChat(){
+  var cookie=ck.value.trim();if(!cookie)return alert('请填写 Cookie');
+  var prompt=document.getElementById('prompt').value.trim();if(!prompt)return alert('请填写 Prompt');
+  var body={cookie:cookie,prompt:prompt,
+    model:document.getElementById('c-mod').value,
+    thinking:document.getElementById('c-thk').checked,
+    title:document.getElementById('c-ttl').value||'untitle',
+    timeout_ms:+(document.getElementById('c-tmo').value)||120000};
+  var env=document.getElementById('c-env').value.trim();
+  var sid=document.getElementById('c-sid').value.trim();
+  if(env)body.environment_id=env;if(sid)body.session_id=sid;
+  call('/chat',body,'c-btn','c-resp');
+}
+function doEnv(){
+  var cookie=ck.value.trim();if(!cookie)return alert('请填写 Cookie');
+  var body={cookie:cookie};
+  var n=document.getElementById('e-name').value.trim();if(n)body.name=n;
+  call('/create-env',body,'e-btn','e-resp');
+}
+function doRef(){
+  var k=document.getElementById('r-key').value.trim(),n=document.getElementById('r-nm').value.trim();
+  if(!k||!n)return alert('KMS API Key 和 Secret Name 必填');
+  call('/refresh',{kms_api_key:k,secret_name:n,kms_url:document.getElementById('r-url').value.trim()},'r-btn','r-resp');
+}
+async function loadH(){
+  var el=document.getElementById('hc');el.innerHTML='<div class="spin"></div>';
+  try{var d=await(await fetch('/health')).json();
+  el.innerHTML='<div class="hg">'
+    +'<div class="hc"><div style="font-size:12px;color:var(--mu)">Status</div><div class="v">&#9679; Running</div></div>'
+    +'<div class="hc"><div style="font-size:12px;color:var(--mu)">Port</div><div class="v">'+d.port+'</div></div>'
+    +'<div class="hc"><div style="font-size:12px;color:var(--mu)">Org</div><div class="v" style="font-size:13px">'+(d.defaults&&d.defaults.org_id?d.defaults.org_id.slice(0,8):'—')+'...</div></div>'
+    +'<div class="hc"><div style="font-size:12px;color:var(--mu)">Default Env</div><div class="v" style="font-size:13px">'+(d.defaults&&d.defaults.environment_id||'—')+'</div></div>'
+    +'</div><div style="margin-top:14px"><pre>'+JSON.stringify(d,null,2)+'</pre></div>';
+  }catch(e){el.innerHTML='<span style="color:var(--er)">'+e.message+'</span>'}
+}
+loadH();
+</script></body></html>`;
+
 // ─────────────────────────── HTTP server ───────────────────────────
 const server = Bun.serve({
     port: PORT,
@@ -338,22 +502,25 @@ const server = Bun.serve({
         if (req.method === "GET" && url.pathname === "/health") {
             return json({ ok: true, port: PORT, defaults: { org_id: DEFAULT_ORG, environment_id: DEFAULT_ENV || null } });
         }
+        // ── dashboard ──
         if (req.method === "GET" && url.pathname === "/") {
-            return new Response(`mybox29 chat-api
-endpoints:
-  GET  /health
-  POST /chat        {
-    cookie (required), session_id?, prompt, thinking?, environment_id?, model?,
-    append_system_prompt?, allowed_tools?[], client_sha?, full_beta?,
-    title?, timeout_ms?, org_id?
-  }
-  POST /create-env  {cookie?, name?, languages?[], cwd?, init_script?, environment?, network_config?}
-  POST /refresh     {kms_api_key?, secret_name?, kms_url?}
-  POST /events      {cookie?, session_id, action=post|get, events?[], sort_order?, limit?}
-
-defaults loaded from .env (KMS_API_KEY, SECRET_NAME, SESSION_KEY, ORG_ID, BRIDGE_ENV_ID).
-`, { headers: { "content-type": "text/plain; charset=utf-8" } });
+            if (!isDashAuthed(req)) {
+                return new Response(LOGIN_HTML.replace("ERRORMSG", ""), { headers: { "content-type": "text/html; charset=utf-8" } });
+            }
+            return new Response(DASH_HTML, { headers: { "content-type": "text/html; charset=utf-8" } });
         }
+        if (req.method === "POST" && url.pathname === "/login") {
+            const form = await req.formData().catch(() => null);
+            const pass = form?.get("password") ?? "";
+            if (pass === ADMIN_PASS) {
+                return new Response(null, { status: 302, headers: { "Location": "/", "Set-Cookie": `dash_auth=${DASH_TOKEN}; HttpOnly; Path=/; SameSite=Strict` } });
+            }
+            return new Response(LOGIN_HTML.replace("ERRORMSG", '<p class="err">密码错误</p>'), { status: 401, headers: { "content-type": "text/html; charset=utf-8" } });
+        }
+        if (url.pathname === "/logout") {
+            return new Response(null, { status: 302, headers: { "Location": "/", "Set-Cookie": "dash_auth=; HttpOnly; Path=/; Max-Age=0" } });
+        }
+        // ── API ──
         if (req.method === "POST" && url.pathname === "/chat")        return handleChat(req);
         if (req.method === "POST" && url.pathname === "/create-env")  return handleCreateEnv(req);
         if (req.method === "POST" && url.pathname === "/refresh")     return handleRefresh(req);
