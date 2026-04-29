@@ -99,50 +99,45 @@ entrypoint 按以下顺序检测凭证，先命中先用：
 
 镜像设计为**通用、可分发**：默认不含任何用户凭证。容器化的"原子复刻"个人镜像（如 `:latest`、`:atomic-clone-*`）含敏感数据，仅供个人使用，**请勿公开使用**。
 
-## 多机同步（本仓库内置加密凭证流程）
+## 多机同步
 
-`secrets/` 目录里存放 **AES-256-CBC + PBKDF2 (200K iterations)** 加密后的 token，
-解密口令 = 你的 KMS API key（仅你本人知晓，未公开存储）。
+仓库提供两套互为兜底的凭证获取方案：
 
-任意一台拥有该 KMS 口令的机器可执行：
+| 方案 | 凭证来源 | 适用场景 |
+|---|---|---|
+| ⭐ **KMS（在线）** | `https://kms-admin-4lo.pages.dev` | 联网时首选，token 轮转无需 commit |
+| 🛟 **加密文件（离线）** | `secrets/*.enc`（AES-256 + PBKDF2 200K iter） | 内网/离线/KMS 故障兜底 |
+
+`run.sh` 自动按上述优先级尝试，单一密钥（你的 KMS key）即可同时承担两种角色。
+
+### 任意机器同步流程
 
 ```bash
-# 1. 拉仓库
-git clone https://github.com/ziren28/mybox29.git
-cd mybox29
-
-# 2. 设解密口令（你的 KMS API key）
+git clone https://github.com/ziren28/mybox29.git && cd mybox29
 export KMS_KEY=<your-kms-api-key>
-
-# 3. 一键启动（自动解密 + 注入 + docker run）
 ./run.sh                                # 默认 :1.1.0 进 bash
 ./run.sh 1.1.0                          # 指定 tag
-./run.sh 1.1.0 claude --print "hi"      # 带命令直接执行
-```
-
-`run.sh` 内部步骤：
-
-```
-secrets/oauth_token.enc          ─openssl-d─►  CLAUDE_OAUTH_TOKEN          (env)
-secrets/session_ingress_token.enc ─openssl-d─►  CLAUDE_SESSION_INGRESS_TOKEN (env)
-                                                            ↓
-                                                     docker run -e ...
-```
-
-仅需保护 KMS API key 一处秘密，其它一切都可在公开仓库流转。
-
-### 手动解密（不用 run.sh）
-
-```bash
-export KMS_KEY=<your-kms-api-key>
-./secrets/decrypt.sh oauth      # 输出 OAuth token 到 stdout
-./secrets/decrypt.sh ingress    # 输出 Session Ingress token 到 stdout
+./run.sh 1.1.0 claude --print "hi"      # 直接执行命令
 ```
 
 ### Token 轮转
 
-OAuth token 过期后，原始来源（`/home/claude/.claude/remote/.oauth_token`）会自动刷新，
-重新加密推送一次即可：
+**KMS 方案（推荐）** — 在源机器上：
+
+```bash
+KMS_ADMIN_TOKEN=$(curl -sS -X POST https://kms-admin-4lo.pages.dev/api/login \
+    -H 'Content-Type: application/json' \
+    -d '{"password":"<your-admin-password>"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+
+curl -sS -X POST https://kms-admin-4lo.pages.dev/api/secrets \
+    -H "Authorization: Bearer $KMS_ADMIN_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"primary\":\"claude-oauth-token\",\"category\":\"claude\",\"key_data\":{\"token\":\"$(cat /home/claude/.claude/remote/.oauth_token)\"}}"
+```
+
+更新后所有机器**无需 git pull**，下次 `./run.sh` 自动取新值。
+
+**加密文件方案** — 重新加密 + push：
 
 ```bash
 openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
@@ -150,6 +145,18 @@ openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
     -in /home/claude/.claude/remote/.oauth_token \
     -out secrets/oauth_token.enc
 git add secrets/ && git commit -m "rotate oauth token" && git push
+```
+
+### 手动取 token（不用 run.sh）
+
+```bash
+# 从 KMS
+curl -sS "https://kms-admin-4lo.pages.dev/api/query?primary=claude-oauth-token" \
+    -H "Authorization: Bearer $KMS_KEY" | jq -r .key_data.token
+
+# 从本地加密文件
+./secrets/decrypt.sh oauth      # 输出 OAuth token 到 stdout
+./secrets/decrypt.sh ingress    # 输出 Session Ingress token 到 stdout
 ```
 
 ## 构建
